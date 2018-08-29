@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="CGImap 0.6.1 (3862 thorn-02.openstreetmap.org)" copyright="OpenStreetMap and contributors" attribution="http://www.openstreetmap.org/copyright" license="http://opendatacommons.org/licenses/odbl/1-0/">
+ <bounds minlat="40.7049900" minlon="-74.0132600" maxlat="40.7050600" maxlon="-74.0126800"/>
+ <node id="42428529" visible="true" version="6" changeset="48981343" timestamp="2017-05-25T18:42:34Z" user="ALE!" uid="40023" lat="40.7050450" lon="-74.0133173">
+  <tag k="highway" v="stop"/>
+ </node>
+ <node id="42431868" visible="true" version="3" changeset="3363924" timestamp="2009-12-13T15:45:29Z" user="NE2" uid="207745" lat="40.7049909" lon="-74.0115503">
+  <tag k="highway" v="traffic_signals"/>
+ </node>
+ <node id="42442088" visible="true" version="4" changeset="11117962" timestamp="2012-03-27T16:51:05Z" user="robgeb" uid="336460" lat="40.7050111" lon="-74.0126271"/>
+ <node id="3738776598" visible="true" version="1" changeset="33950487" timestamp="2015-09-11T08:53:32Z" user="robgeb" uid="336460" lat="40.7049652" lon="-74.0116690"/>
+ <node id="4739552816" visible="true" version="1" changeset="46924003" timestamp="2017-03-17T10:40:30Z" user="Wolowitz" uid="670376" lat="40.7050429" lon="-74.0132599">
+  <tag k="crossing" v="uncontrolled"/>
+  <tag k="direction" v="forward"/>
+  <tag k="highway" v="crossing"/>
+  <tag k="kerb" v="lowered"/>
+  <tag k="side" v="right"/>
+ </node>
+ <way id="388281633" visible="true" version="4" changeset="57707278" timestamp="2018-04-01T08:54:37Z" user="rusefkuma" uid="7637564">
+  <nd ref="42431868"/>
+  <nd ref="3738776598"/>
+  <nd ref="42442088"/>
+  <nd ref="4739552816"/>
+  <nd ref="42428529"/>
+  <tag k="highway" v="residential"/>
+  <tag k="lanes" v="1"/>
+  <tag k="lit" v="yes"/>
+  <tag k="maxspeed" v="25 mph"/>
+  <tag k="name" v="Beaver Street"/>
+  <tag k="oneway" v="yes"/>
+  <tag k="parking:lane:both" v="parallel"/>
+  <tag k="sidewalk" v="both"/>
+  <tag k="surface" v="asphalt"/>
+  <tag k="tiger:cfcc" v="A41"/>
+  <tag k="tiger:county" v="New York, NY"/>
+  <tag k="tiger:name_base" v="Beaver"/>
+  <tag k="tiger:name_type" v="St"/>
+  <tag k="tiger:reviewed" v="no"/>
+  <tag k="tiger:zip_left" v="10005"/>
+  <tag k="tiger:zip_right" v="10005"/>
+ </way>
+</osm>
