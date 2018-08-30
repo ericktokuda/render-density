@@ -32,14 +32,13 @@ def get_all_nodes(root, invways):
     nodesidx = index.Index()
     coords = {}
 
+    #debug('Valid (inside get_all_nodes):{}'.format(len(valid)))
     for child in root:
         if child.tag != 'node': continue # not node
         if int(child.attrib['id']) not in valid: continue # non relevant node
 
         att = child.attrib
         lat, lon = float(att['lat']), float(att['lon'])
-        #print('nodeid:')
-        #print(int(att['id']))
         nodesidx.insert(int(att['id']), (lat, lon, lat, lon))
         coords[int(att['id'])] = (lat, lon)
 
@@ -58,6 +57,8 @@ def get_all_ways(root):
     ways = {}
     invways = {} # inverted list of ways
 
+    #total=0
+    nodesset = set()
     for way in root:
         if way.tag != 'way': continue
         wayid = int(way.attrib['id'])
@@ -77,9 +78,14 @@ def get_all_ways(root):
 
         if isstreet:
             ways[wayid]  = nodes
+            #total += len(nodes)
+
             for node in nodes:
                 if node in invways.keys(): invways[node].append(wayid)
                 else: invways[node] = [wayid]
+                nodesset.add(node)
+
+    #debug('Number of nodes in get_all_ways:{}'.format(len(nodesset)))
 
     return ways, invways
 
@@ -129,6 +135,42 @@ def get_crossings(invways):
         if len(waysids) > 1:
             crossings.add(nodeid)
     return crossings
+
+def filter_out_orphan_nodes(ways, invways, nodeshash):
+    """Check consistency of nodes in invways and nodeshash and fix them in case
+    of inconsistency
+    It can just be explained by the *non* exitance of nodes, even though they are
+    referenced inside ways (<nd ref>)
+
+    Args:
+    invways(dict of list): nodeid as key and a list of wayids as values
+    nodeshash(dict of 2-uple): nodeid as key and (x, y) as value
+    ways(dict of list): wayid as key and an ordered list of nodeids as values
+
+    Returns:
+    dict of list, dict of lists
+    """
+    ninvways = len(invways.keys())
+    nnodeshash = len(nodeshash.keys())
+    if ninvways == nnodeshash: return 
+
+    validnodes = set(nodeshash.keys())
+
+    # Filter ways
+    for wayid, nodes in ways.items():
+        newlist = [ nodeid for nodeid in nodes if nodeid in validnodes ]
+        ways[wayid] = newlist
+        
+    # Filter invways
+    invwaysnodes = set(invways.keys())
+    invalid = invwaysnodes.difference(validnodes)
+
+    for nodeid in invalid:
+        del invways[nodeid]
+
+    ninvways = len(invways.keys())
+    return ways, invways
+
 
 ##########################################################
 def render_matplotlib(nodeshash, ways, crossings):
@@ -209,12 +251,9 @@ def main():
     root = tree.getroot() # Tag osm
 
     ways, invways = get_all_ways(root)
-    crossings = get_crossings(invways)
-
-    # At this point I have a list of relevant nodes
     nodestree, nodeshash = get_all_nodes(root, invways)
-
-    #nodes = idx2array_nodes(nodesidx)
+    ways, invways = filter_out_orphan_nodes(ways, invways, nodeshash)
+    crossings = get_crossings(invways)
     render_map(nodeshash, ways, crossings, args.frontend)
     
 ##########################################################
