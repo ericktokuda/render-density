@@ -18,7 +18,7 @@ WAY_TYPES = ["motorway", "trunk", "primary", "secondary", "tertiary",
              "unclassified", "residential", "service", "living_street"]
 
 ##########################################################
-def get_all_nodes(root):
+def get_all_nodes(root, invways):
     """Get all nodes in the xml struct
 
     Args:
@@ -26,12 +26,16 @@ def get_all_nodes(root):
 
     Returns:
     rtree.index: rtree of the nodes
+    invways(dict): inverted list of ways, i.e., node as key and list of way ids as values
     """
+    valid = invways.keys()
     nodesidx = index.Index()
     coords = {}
 
     for child in root:
-        if child.tag != 'node': continue
+        if child.tag != 'node': continue # not node
+        if int(child.attrib['id']) not in valid: continue # non relevant node
+
         att = child.attrib
         lat, lon = float(att['lat']), float(att['lon'])
         #print('nodeid:')
@@ -42,7 +46,7 @@ def get_all_nodes(root):
     return nodesidx, coords
 
 ##########################################################
-def get_all_ways(root, nodescoords):
+def get_all_ways(root):
     """Get all ways in the xml struct
 
     Args:
@@ -67,13 +71,15 @@ def get_all_ways(root, nodescoords):
             elif child.tag == 'tag':
                 # Found a street segment
 
-                if child.attrib['k'] == 'highway': # TODO: REMOVE IT
-                #if child.attrib['k'] == 'highway' and child.attrib['v'] in WAY_TYPES:
+                #if child.attrib['k'] == 'highway': # TODO: REMOVE IT
+                if child.attrib['k'] == 'highway' and child.attrib['v'] in WAY_TYPES:
                     isstreet = True
 
         if isstreet:
             ways[wayid]  = nodes
-            for node in nodes: invways[node] = wayid
+            for node in nodes:
+                if node in invways.keys(): invways[node].append(wayid)
+                else: invways[node] = [wayid]
 
     return ways, invways
 
@@ -92,14 +98,22 @@ def idx2array_nodes(nodes_rtree):
     return nodes
 
 ##########################################################
-def render_map(nodes, ways, frontend='bokeh'):
+def render_map(nodeshash, ways, crossings, frontend='bokeh'):
     if frontend == 'matplotlib':
-        render_matplotlib(nodes, ways)
+        render_matplotlib(nodeshash, ways, crossings)
     else:
-        render_bokeh(nodes, ways)
+        render_bokeh(nodeshash, ways, crossings)
 
 ##########################################################
 def get_nodes_coords_from_hash(nodeshash):
+    """Get nodes coordinates and discard nodes ids information
+    Args:
+    nodeshash(dict): nodeid as key and (x, y) as value
+
+    Returns:
+    np.array(n, 2): Return a two-column table containing all the coordinates
+    """
+
     nnodes = len(nodeshash.keys())
     nodes = np.ndarray((nnodes, 2))
 
@@ -109,11 +123,20 @@ def get_nodes_coords_from_hash(nodeshash):
     return nodes
 
 ##########################################################
-def render_matplotlib(nodeshash, ways):
+def get_crossings(invways):
+    crossings = set()
+    for nodeid, waysids in invways.items():
+        if len(waysids) > 1:
+            crossings.add(nodeid)
+    return crossings
+
+##########################################################
+def render_matplotlib(nodeshash, ways, crossings):
     # render nodes
     nodes = get_nodes_coords_from_hash(nodeshash)
-    plt.scatter(nodes[:, 1], nodes[:, 0])
+    plt.scatter(nodes[:, 1], nodes[:, 0], c='blue', alpha=1, s=20)
 
+    # render ways
     for wnodes in ways.values():
         r = lambda: random.randint(0,255)
         waycolor = '#%02X%02X%02X' % (r(),r(),r())
@@ -123,10 +146,17 @@ def render_matplotlib(nodeshash, ways):
             lats.append(a)
             lons.append(o)
         plt.plot(lons, lats, linewidth=2, color=waycolor)
+
+    # render crossings
+    crossingscoords = np.ndarray((len(crossings), 2))
+    for j, crossing in enumerate(crossings):
+        crossingscoords[j, :] = np.array(nodeshash[crossing])
+    plt.scatter(crossingscoords[:, 1], crossingscoords[:, 0], c='black')
+    #plt.axis('equal')
     plt.show()
 
 ##########################################################
-def render_bokeh(nodeshash, ways):
+def render_bokeh(nodeshash, ways, crossings):
     nodes = get_nodes_coords_from_hash(nodeshash)
 
     from bokeh.plotting import figure, show, output_file
@@ -147,6 +177,12 @@ def render_bokeh(nodeshash, ways):
             lats.append(a)
             lons.append(o)
         p.line(lons, lats, line_width=2, line_color=waycolor)
+
+    # render crossings
+    crossingscoords = np.ndarray((len(crossings), 2))
+    for j, crossing in enumerate(crossings):
+        crossingscoords[j, :] = np.array(nodeshash[crossing])
+    p.scatter(crossingscoords[:, 1], crossingscoords[:, 0], line_color='black')
 
     output_file("osm-test.html", title="OSM test")
 
@@ -172,11 +208,14 @@ def main():
     tree = ET.parse(args.inputosm)
     root = tree.getroot() # Tag osm
 
-    nodestree, nodescoords = get_all_nodes(root)
-    ways, invways = get_all_ways(root, nodescoords)
+    ways, invways = get_all_ways(root)
+    crossings = get_crossings(invways)
+
+    # At this point I have a list of relevant nodes
+    nodestree, nodeshash = get_all_nodes(root, invways)
 
     #nodes = idx2array_nodes(nodesidx)
-    render_map(nodescoords, ways, args.frontend)
+    render_map(nodeshash, ways, crossings, args.frontend)
     
 ##########################################################
 if __name__ == '__main__':
