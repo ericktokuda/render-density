@@ -57,7 +57,7 @@ def get_all_ways(root, nodescoords):
     for way in root:
         if way.tag != 'way': continue
         wayid = int(way.attrib['id'])
-        istreet = False
+        isstreet = False
         nodes = []
 
         nodes = []
