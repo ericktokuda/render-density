@@ -30,9 +30,8 @@ def get_all_nodes(root, invways):
     """
     valid = invways.keys()
     nodesidx = index.Index()
-    coords = {}
+    nodeshash = {}
 
-    #debug('Valid (inside get_all_nodes):{}'.format(len(valid)))
     for child in root:
         if child.tag != 'node': continue # not node
         if int(child.attrib['id']) not in valid: continue # non relevant node
@@ -40,9 +39,10 @@ def get_all_nodes(root, invways):
         att = child.attrib
         lat, lon = float(att['lat']), float(att['lon'])
         nodesidx.insert(int(att['id']), (lat, lon, lat, lon))
-        coords[int(att['id'])] = (lat, lon)
+        nodeshash[int(att['id'])] = (lat, lon)
+    debug('Found {} path nodes'.format(len(nodeshash.keys())))
 
-    return nodesidx, coords
+    return nodesidx, nodeshash
 
 ##########################################################
 def get_all_ways(root):
@@ -52,13 +52,12 @@ def get_all_ways(root):
     root(ET): root element 
 
     Returns:
-    rtree.index: rtree of the nodes
+    dict of list: hash of wayids as key and list of nodes as values;
+    dict of list: hash of nodeid as key and list of wayids as values;
     """
     ways = {}
     invways = {} # inverted list of ways
 
-    #total=0
-    nodesset = set()
     for way in root:
         if way.tag != 'way': continue
         wayid = int(way.attrib['id'])
@@ -70,23 +69,17 @@ def get_all_ways(root):
             if child.tag == 'nd':
                 nodes.append(int(child.attrib['ref']))
             elif child.tag == 'tag':
-                # Found a street segment
-
-                #if child.attrib['k'] == 'highway': # TODO: REMOVE IT
                 if child.attrib['k'] == 'highway' and child.attrib['v'] in WAY_TYPES:
                     isstreet = True
 
         if isstreet:
             ways[wayid]  = nodes
-            #total += len(nodes)
 
             for node in nodes:
                 if node in invways.keys(): invways[node].append(wayid)
                 else: invways[node] = [wayid]
-                nodesset.add(node)
 
-    #debug('Number of nodes in get_all_ways:{}'.format(len(nodesset)))
-
+    debug('Found {} ways'.format(len(ways.keys())))
     return ways, invways
 
 ##########################################################
@@ -130,12 +123,23 @@ def get_nodes_coords_from_hash(nodeshash):
 
 ##########################################################
 def get_crossings(invways):
+    """Get the crossings
+
+    Args:
+    invways(dict of list): inverted list of the ways. It s a dict of nodeid as key and
+    list of wayids as values
+
+    Returns:
+    set: set of crossings
+    """
+
     crossings = set()
     for nodeid, waysids in invways.items():
         if len(waysids) > 1:
             crossings.add(nodeid)
     return crossings
 
+##########################################################
 def filter_out_orphan_nodes(ways, invways, nodeshash):
     """Check consistency of nodes in invways and nodeshash and fix them in case
     of inconsistency
@@ -152,7 +156,7 @@ def filter_out_orphan_nodes(ways, invways, nodeshash):
     """
     ninvways = len(invways.keys())
     nnodeshash = len(nodeshash.keys())
-    if ninvways == nnodeshash: return 
+    if ninvways == nnodeshash: return ways, invways
 
     validnodes = set(nodeshash.keys())
 
@@ -169,6 +173,7 @@ def filter_out_orphan_nodes(ways, invways, nodeshash):
         del invways[nodeid]
 
     ninvways = len(invways.keys())
+    debug('Filtered {} orphan nodes.'.format(ninvways - nnodeshash))
     return ways, invways
 
 
@@ -232,6 +237,41 @@ def render_bokeh(nodeshash, ways, crossings):
     return
 
 ##########################################################
+def get_segments(ways, crossings):
+    """Get segments, given the ways and the crossings
+
+    Args:
+    ways(dict of list): hash of wayid as key and list of nodes as values
+    crossings(set): set of nodeids in crossings
+
+    Returns:
+    dict of list: hash of segmentid as key and list of nodes as value
+    dict of list: hash of nodeid as key and list of sids as value
+    """
+
+    segments = {}
+    invsegments = {}
+    myset = set(crossings)
+
+    sid = 0 # segmentid
+    for w, nodes in ways.items():
+        if not myset.intersection(set(nodes)): continue
+        segment = []
+        for node in nodes:
+            segment.append(node)
+
+            if node in myset and len(segment) > 1:
+                segments[sid] = segment
+                for nod in segment:
+                    if node in invsegments:
+                        invsegments[node].append(sid) 
+                    else:
+                        invsegments[node] = [sid]
+                sid += 1
+    debug('Found {} segments'.format(len(segments.keys())))
+    return segments, invsegments
+
+##########################################################
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('inputosm', help='Input osm file')
@@ -241,7 +281,8 @@ def main():
 
     args = parser.parse_args()
 
-    args.verbose = True
+    args.verbose = True # TODO: remove it
+
     if args.verbose:
         loglevel = args.verbose if logging.DEBUG else logging.ERROR
 
@@ -254,7 +295,9 @@ def main():
     nodestree, nodeshash = get_all_nodes(root, invways)
     ways, invways = filter_out_orphan_nodes(ways, invways, nodeshash)
     crossings = get_crossings(invways)
-    render_map(nodeshash, ways, crossings, args.frontend)
+    segments, invsegments = get_segments(ways, crossings)
+    #render_map(nodeshash, ways, crossings, args.frontend)
+    render_map(nodeshash, segments, crossings, args.frontend)
     
 ##########################################################
 if __name__ == '__main__':
