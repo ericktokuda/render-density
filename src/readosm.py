@@ -11,7 +11,7 @@ import xml.etree.ElementTree as ET
 from rtree import index
 import matplotlib.pyplot as plt
 import logging
-from logging import debug
+from logging import debug, warning
 import random
 import time
 
@@ -26,10 +26,10 @@ def parse_nodes(root, invways):
 
     Args:
     root(ET): root element 
+    invways(dict): inverted list of ways, i.e., node as key and list of way ids as values
 
     Returns:
-    rtree.index: rtree of the nodes
-    invways(dict): inverted list of ways, i.e., node as key and list of way ids as values
+
     """
     t0 = time.time() 
     valid = invways.keys()
@@ -88,11 +88,11 @@ def parse_ways(root):
     return ways, invways
 
 ##########################################################
-def render_map(nodeshash, ways, crossings, artpoints, queries, frontend='bokeh'):
+def render_map(nodeshash, ways, crossings, artpoints, queries, counts, frontend='bokeh'):
     if frontend == 'matplotlib':
-        render_matplotlib(nodeshash, ways, crossings, artpoints, queries)
+        render_matplotlib(nodeshash, ways, crossings, artpoints, queries, counts)
     else:
-        render_bokeh(nodeshash, ways, crossings, artoints, queries)
+        render_bokeh(nodeshash, ways, crossings, artoints, queries, counts)
 
 ##########################################################
 def get_nodes_coords_from_hash(nodeshash):
@@ -251,7 +251,6 @@ def evenly_space_segment(segment, nodeshash, epsilon):
 
 ##########################################################
 def evenly_space_segments(segments, nodeshash, epsilon=0.0001):
-#def evenly_space_segments(segments, nodeshash, epsilon=1):
     """Evenly space all segments and create artificial points
 
     Args:
@@ -272,7 +271,7 @@ def evenly_space_segments(segments, nodeshash, epsilon=0.0001):
         points[idx:idx+n, 0:2] = coords
         points[idx:idx+n, 2] = sid
         idx = idx + n
-    debug('1-D grid points created ({:.3f}s)'.format(time.time() - t0))
+    debug('New {} support points ({:.3f}s)'.format(idx, time.time() - t0))
     return points[:idx, :]
 
 ##########################################################
@@ -295,6 +294,7 @@ def create_rtree(points, nodeshash, invsegments, invways):
         lat, lon  = p[0:2]
         sid = int(p[2])
         pointsidx.insert(pid, (lat, lon, lat, lon), sid)
+        #debug('pid:{}, {}, {}'.format(pid, lat, lon))
     
     debug('R-tree created ({:.3f}s)'.format(time.time() - t0))
 
@@ -311,8 +311,59 @@ def test_query(pointsidx, points):
         list(pointsidx.nearest(querycoords, num_results=1, objects='raw'))
     elapsed = time.time() - t0
     debug(elapsed)
+
+def get_count_by_segment(csvinput, segments, pointstree):
+    #counts = []
+    fh = open(csvinput)
+    fh.readline()
+    #imageid,n,x,y,t
+    nsegments = len(segments.keys())
+    counts = np.zeros(nsegments)
+    denom = np.zeros(nsegments)
+    #denom = np.ones(nsegments)
+
+    from pyproj import Proj, transform
+    inProj = Proj(init='epsg:3857')
+    outProj = Proj(init='epsg:4326')
+    #x1,y1 = -11705274.6374,4826473.6922
+
+    nerrors = 0
+    maxcount = 0
+    for i, line in enumerate(fh):
+        arr = line.split(',')
+        count = int(arr[1])
+        #print('##########################################################')
+        #print(arr)
+        if not arr[2]:
+            nerrors += 1
+            continue
+        lon = float(arr[2])
+        lat = float(arr[3])
+        lon, lat = transform(inProj,outProj,lon,lat)
+        if count > maxcount: maxcount = count
+
+        querycoords = (lat, lon, lat, lon) 
+        #debug(lat)
+        #debug(lon)
+        sid = list(pointstree.nearest(querycoords, num_results=1, objects='raw'))[0]
+
+        counts[sid] += count
+        denom[sid] += 1
+
+        #if i % 10000 == 0: debug('Iteration:{}'.format(i))
+        #if i > 100000: break
+
+    for i in range(nsegments):
+        if denom[i] > 0:
+            counts[i] /= denom[i]
+    debug(np.max(counts))
+    debug('Max count:{}'.format(maxcount))
+    warning('nerrors:{}'.format(nerrors))
+    fh.close()
+    return counts
+
 ##########################################################
-def render_matplotlib(nodeshash, ways, crossings, artpoints, queries):
+def render_matplotlib(nodeshash, ways, crossings, artpoints, queries, avgcounts=[]):
     # render nodes
     nodes = get_nodes_coords_from_hash(nodeshash)
     #plt.scatter(nodes[:, 1], nodes[:, 0], c='blue', alpha=1, s=20)
@@ -327,7 +378,14 @@ def render_matplotlib(nodeshash, ways, crossings, artpoints, queries):
     for wid, wnodes in ways.items():
         i += 1
         r = lambda: random.randint(0,255)
-        waycolor = '#%02X%02X%02X' % (r(),r(),r())
+        if avgcounts == np.array([]):
+            waycolor = '#%02X%02X%02X' % (r(),r(),r())
+        else:
+            #debug(int(50+(avgcounts[wid])*10))
+            #waycolor = '#%02X%02X%02X' % (127, 127, int(50+(avgcounts[wid])*10))
+            waycolor = 'darkblue'
+            alpha = avgcounts[wid] / 15
+            if alpha > 1: alpha = 1
         colors[wid] = waycolor
         lats = []; lons = []
         for nodeid in wnodes:
@@ -337,13 +395,14 @@ def render_matplotlib(nodeshash, ways, crossings, artpoints, queries):
         plt.plot(lons, lats, linewidth=2, color=waycolor)
 
     # render queries
-    for q in queries:
-        plt.scatter(q[1], q[0], linewidth=2, color=colors[q[2]])
+    #for q in queries:
+        #plt.scatter(q[1], q[0], linewidth=2, color=colors[q[2]])
 
     # render crossings
     crossingscoords = np.ndarray((len(crossings), 2))
     for j, crossing in enumerate(crossings):
         crossingscoords[j, :] = np.array(nodeshash[crossing])
+
     #plt.scatter(crossingscoords[:, 1], crossingscoords[:, 0], c='black')
     #plt.axis('equal')
     plt.show()
@@ -411,21 +470,27 @@ def main():
     artpoints = evenly_space_segments(segments, nodeshash)
     artpointstree = create_rtree(artpoints, nodeshash, invsegments, invways)
 
+    #for nod, val in nodeshash.items():
+        #print(val[0], val[1])
+        #break
+
     queried = []
-    for i in range(1000):
-        nartpoints, _ = artpoints.shape
-        idx = np.random.randint(nartpoints)
-        x = np.random.rand()/1000
-        y = np.random.rand()/1000
-        x0 = artpoints[idx, 0] + x
-        y0 = artpoints[idx, 1] + y
-        querycoords = (x0, y0, x0, y0)
-        segid = list(artpointstree.nearest(querycoords, num_results=1, objects='raw'))[0]
-        queried.append([x0, y0, segid])
+    #for i in range(1000):
+        #nartpoints, _ = artpoints.shape
+        #idx = np.random.randint(nartpoints)
+        #x = np.random.rand()/1000
+        #y = np.random.rand()/1000
+        #x0 = artpoints[idx, 0] + x
+        #y0 = artpoints[idx, 1] + y
+        #querycoords = (x0, y0, x0, y0)
+        #segid = list(artpointstree.nearest(querycoords, num_results=1, objects='raw'))[0]
+        #queried.append([x0, y0, segid])
 
     queried = np.array(queried)
 
-    render_map(nodeshash, segments, crossings, artpoints, queried, args.frontend)
+    csvinput = '/home/frodo/projects/timeseries-vis/20180723-peds_westvillage_workdays_crs3857_snapped.csv'
+    mycount = get_count_by_segment(csvinput, segments, artpointstree)
+    render_map(nodeshash, segments, crossings, artpoints, queried, mycount, args.frontend)
     
 ##########################################################
 if __name__ == '__main__':
