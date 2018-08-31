@@ -181,10 +181,12 @@ def filter_out_orphan_nodes(ways, invways, nodeshash):
 def render_matplotlib(nodeshash, ways, crossings):
     # render nodes
     nodes = get_nodes_coords_from_hash(nodeshash)
-    plt.scatter(nodes[:, 1], nodes[:, 0], c='blue', alpha=1, s=20)
+    #plt.scatter(nodes[:, 1], nodes[:, 0], c='blue', alpha=1, s=20)
 
     # render ways
+    i = 0
     for wnodes in ways.values():
+        i += 1
         r = lambda: random.randint(0,255)
         waycolor = '#%02X%02X%02X' % (r(),r(),r())
         lats = []; lons = []
@@ -251,23 +253,33 @@ def get_segments(ways, crossings):
 
     segments = {}
     invsegments = {}
-    myset = set(crossings)
 
     sid = 0 # segmentid
+    segment = []
     for w, nodes in ways.items():
-        if not myset.intersection(set(nodes)): continue
+        if not crossings.intersection(set(nodes)):
+            segments[sid] = nodes
+            sid += 1
+            continue
+
         segment = []
         for node in nodes:
             segment.append(node)
 
-            if node in myset and len(segment) > 1:
+            if node in crossings and len(segment) > 1:
                 segments[sid] = segment
-                for nod in segment:
-                    if node in invsegments:
-                        invsegments[node].append(sid) 
-                    else:
-                        invsegments[node] = [sid]
+                for snode in segment:
+                    if snode in invsegments: invsegments[snode].append(sid) 
+                    else: invsegments[snode] = [sid]
+                segment = [node]
                 sid += 1
+
+        segments[sid] = segment # Last segment
+        for snode in segment:
+            if snode in invsegments: invsegments[snode].append(sid) 
+            else: invsegments[snode] = [sid]
+        sid += 1
+
     debug('Found {} segments'.format(len(segments.keys())))
     return segments, invsegments
 
@@ -293,10 +305,9 @@ def main():
 
     ways, invways = get_all_ways(root)
     nodestree, nodeshash = get_all_nodes(root, invways)
-    ways, invways = filter_out_orphan_nodes(ways, invways, nodeshash)
+    #ways, invways = filter_out_orphan_nodes(ways, invways, nodeshash)
     crossings = get_crossings(invways)
     segments, invsegments = get_segments(ways, crossings)
-    #render_map(nodeshash, ways, crossings, args.frontend)
     render_map(nodeshash, segments, crossings, args.frontend)
     
 ##########################################################
