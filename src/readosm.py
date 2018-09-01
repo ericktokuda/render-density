@@ -313,9 +313,9 @@ def test_query(pointsidx, points):
     debug(elapsed)
 
 def get_count_by_segment(csvinput, segments, pointstree):
-    #counts = []
     fh = open(csvinput)
-    fh.readline()
+    fh.readline() # Header
+
     #imageid,n,x,y,t
     nsegments = len(segments.keys())
     counts = np.zeros(nsegments)
@@ -325,15 +325,12 @@ def get_count_by_segment(csvinput, segments, pointstree):
     from pyproj import Proj, transform
     inProj = Proj(init='epsg:3857')
     outProj = Proj(init='epsg:4326')
-    #x1,y1 = -11705274.6374,4826473.6922
 
     nerrors = 0
     maxcount = 0
     for i, line in enumerate(fh):
         arr = line.split(',')
         count = int(arr[1])
-        #print('##########################################################')
-        #print(arr)
         if not arr[2]:
             nerrors += 1
             continue
@@ -343,15 +340,12 @@ def get_count_by_segment(csvinput, segments, pointstree):
         if count > maxcount: maxcount = count
 
         querycoords = (lat, lon, lat, lon) 
-        #debug(lat)
-        #debug(lon)
         sid = list(pointstree.nearest(querycoords, num_results=1, objects='raw'))[0]
 
         counts[sid] += count
         denom[sid] += 1
 
-        #if i % 10000 == 0: debug('Iteration:{}'.format(i))
-        #if i > 100000: break
+        #if i > 10000: break
 
     for i in range(nsegments):
         if denom[i] > 0:
@@ -364,15 +358,14 @@ def get_count_by_segment(csvinput, segments, pointstree):
 
 ##########################################################
 def render_matplotlib(nodeshash, ways, crossings, artpoints, queries, avgcounts=[]):
-    # render nodes
+    # Render nodes
     nodes = get_nodes_coords_from_hash(nodeshash)
     #plt.scatter(nodes[:, 1], nodes[:, 0], c='blue', alpha=1, s=20)
 
-    # render artificial nodes
+    # Render artificial nodes
     #plt.scatter(artpoints[:, 1], artpoints[:, 0], c='blue', alpha=1, s=20)
 
-
-    # render ways
+    # Render ways
     colors = {}
     i = 0
     for wid, wnodes in ways.items():
@@ -381,10 +374,9 @@ def render_matplotlib(nodeshash, ways, crossings, artpoints, queries, avgcounts=
         if avgcounts == np.array([]):
             waycolor = '#%02X%02X%02X' % (r(),r(),r())
         else:
-            #debug(int(50+(avgcounts[wid])*10))
             #waycolor = '#%02X%02X%02X' % (127, 127, int(50+(avgcounts[wid])*10))
             waycolor = 'darkblue'
-            alpha = avgcounts[wid] / 15
+            alpha = avgcounts[wid] / 6
             if alpha > 1: alpha = 1
         colors[wid] = waycolor
         lats = []; lons = []
@@ -392,19 +384,20 @@ def render_matplotlib(nodeshash, ways, crossings, artpoints, queries, avgcounts=
             a, o = nodeshash[nodeid]
             lats.append(a)
             lons.append(o)
-        plt.plot(lons, lats, linewidth=2, color=waycolor)
+        plt.plot(lons, lats, linewidth=3, color=waycolor, alpha=alpha)
 
-    # render queries
+    # Render queries
     #for q in queries:
         #plt.scatter(q[1], q[0], linewidth=2, color=colors[q[2]])
 
-    # render crossings
+    # Render crossings
     crossingscoords = np.ndarray((len(crossings), 2))
     for j, crossing in enumerate(crossings):
         crossingscoords[j, :] = np.array(nodeshash[crossing])
 
     #plt.scatter(crossingscoords[:, 1], crossingscoords[:, 0], c='black')
     #plt.axis('equal')
+
     plt.show()
 
 ##########################################################
@@ -421,7 +414,7 @@ def render_bokeh(nodeshash, ways, crossings, artpoints):
 
     # render ways
     for wnodes in ways.values():
-        r = lambda: random.randint(0,255)
+        r = lambda: random.randint(0, 255)
         waycolor = '#%02X%02X%02X' % (r(),r(),r())
         lats = []; lons = []
         for nodeid in wnodes:
@@ -468,6 +461,7 @@ def main():
     crossings = get_crossings(invways)
     segments, invsegments = get_segments(ways, crossings)
     artpoints = evenly_space_segments(segments, nodeshash)
+
     artpointstree = create_rtree(artpoints, nodeshash, invsegments, invways)
 
     #for nod, val in nodeshash.items():
@@ -488,7 +482,8 @@ def main():
 
     queried = np.array(queried)
 
-    csvinput = '/home/frodo/projects/timeseries-vis/20180723-peds_westvillage_workdays_crs3857_snapped.csv'
+    #csvinput = '/home/frodo/projects/timeseries-vis/data/20180901_peds_westvillage_workdays_crs3857_snapped.csv'
+    csvinput = '/home/frodo/projects/timeseries-vis/data/20180901_peds_manhattan_workdays_crs3857_snapped.csv'
     mycount = get_count_by_segment(csvinput, segments, artpointstree)
     render_map(nodeshash, segments, crossings, artpoints, queried, mycount, args.frontend)
     
