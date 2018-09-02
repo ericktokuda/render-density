@@ -2,6 +2,7 @@
 """Parse OSM data
 """
 
+import os
 import numpy as np
 import numpy
 import numpy.linalg
@@ -14,6 +15,7 @@ import logging
 from logging import debug, warning
 import random
 import time
+import pickle
 
 ########################################################## DEFS
 WAY_TYPES = ["motorway", "trunk", "primary", "secondary", "tertiary",
@@ -368,6 +370,7 @@ def render_matplotlib(nodeshash, ways, crossings, artpoints, queries, avgcounts=
     # Render ways
     colors = {}
     i = 0
+    maxvalue = np.log(25)
     for wid, wnodes in ways.items():
         i += 1
         r = lambda: random.randint(0,255)
@@ -376,7 +379,8 @@ def render_matplotlib(nodeshash, ways, crossings, artpoints, queries, avgcounts=
         else:
             #waycolor = '#%02X%02X%02X' % (127, 127, int(50+(avgcounts[wid])*10))
             waycolor = 'darkblue'
-            alpha = avgcounts[wid] / 6
+            #alpha = avgcounts[wid] /1 
+            alpha = np.log(avgcounts[wid]) / maxvalue
             if alpha > 1: alpha = 1
         colors[wid] = waycolor
         lats = []; lons = []
@@ -396,8 +400,7 @@ def render_matplotlib(nodeshash, ways, crossings, artpoints, queries, avgcounts=
         crossingscoords[j, :] = np.array(nodeshash[crossing])
 
     #plt.scatter(crossingscoords[:, 1], crossingscoords[:, 0], c='black')
-    #plt.axis('equal')
-
+    plt.axis('equal')
     plt.show()
 
 ##########################################################
@@ -439,6 +442,7 @@ def render_bokeh(nodeshash, ways, crossings, artpoints):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('inputosm', help='Input osm file')
+    parser.add_argument('--checkpointpath', help='Path to the folders to just render')
     parser.add_argument('--frontend', choices=['bokeh', 'matplotlib'],
                         help='Front-end vis')
     parser.add_argument('--verbose', help='verbose', action='store_true')
@@ -455,14 +459,41 @@ def main():
     tree = ET.parse(args.inputosm)
     root = tree.getroot() # Tag osm
 
-    ways, invways = parse_ways(root)
-    nodeshash = parse_nodes(root, invways)
-    ways, invways = filter_out_orphan_nodes(ways, invways, nodeshash)
-    crossings = get_crossings(invways)
-    segments, invsegments = get_segments(ways, crossings)
-    artpoints = evenly_space_segments(segments, nodeshash)
+    outdir = '/tmp/bu'
+    if args.checkpointpath and os.path.exists(args.checkpointpath):
+        with open(os.path.join(outdir, 'nodeshash.pkl'), 'rb') as fh:
+            nodeshash = pickle.load(fh)
+        with open(os.path.join(outdir, 'segments.pkl'), 'rb') as fh:
+            segments = pickle.load(fh)
+        with open(os.path.join(outdir, 'crossings.pkl'), 'rb') as fh:
+            crossings = pickle.load(fh)
+        with open(os.path.join(outdir, 'artpoints.pkl'), 'rb') as fh:
+            artpoints = pickle.load(fh)
+        with open(os.path.join(outdir, 'mycount.pkl'), 'rb') as fh:
+            mycount = pickle.load(fh)
+    else:
+        ways, invways = parse_ways(root)
+        nodeshash = parse_nodes(root, invways)
+        ways, invways = filter_out_orphan_nodes(ways, invways, nodeshash)
+        crossings = get_crossings(invways)
+        segments, invsegments = get_segments(ways, crossings)
+        artpoints = evenly_space_segments(segments, nodeshash)
 
-    artpointstree = create_rtree(artpoints, nodeshash, invsegments, invways)
+        artpointstree = create_rtree(artpoints, nodeshash, invsegments, invways)
+
+
+        #csvinput = '/home/frodo/projects/timeseries-vis/data/20180901_peds_westvillage_workdays_crs3857_snapped.csv'
+        csvinput = '/home/frodo/projects/timeseries-vis/data/20180901_peds_manhattan_workdays_crs3857_snapped.csv'
+        mycount = get_count_by_segment(csvinput, segments, artpointstree)
+        tostore = {'nodeshash': nodeshash,
+                   'segments': segments,
+                   'crossings': crossings,
+                   'artpoints': artpoints,
+                   'mycount': mycount}
+        for filename, item in tostore.items():
+            fh = open(os.path.join(outdir, filename + '.pkl'),'wb') 
+            pickle.dump(item, fh)
+            fh.close()
 
     #for nod, val in nodeshash.items():
         #print(val[0], val[1])
@@ -482,9 +513,6 @@ def main():
 
     queried = np.array(queried)
 
-    #csvinput = '/home/frodo/projects/timeseries-vis/data/20180901_peds_westvillage_workdays_crs3857_snapped.csv'
-    csvinput = '/home/frodo/projects/timeseries-vis/data/20180901_peds_manhattan_workdays_crs3857_snapped.csv'
-    mycount = get_count_by_segment(csvinput, segments, artpointstree)
     render_map(nodeshash, segments, crossings, artpoints, queried, mycount, args.frontend)
     
 ##########################################################
