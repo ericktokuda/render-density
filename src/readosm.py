@@ -365,52 +365,45 @@ def get_count_by_segment(csvinput, segments, pointstree):
     return counts
 
 ##########################################################
-def render_matplotlib(nodeshash, ways, crossings, artpoints, avgcounts, outdir):
+def render_matplotlib(nodeshash, segments, crossings, artpoints, avgcounts, outdir):
     t0 = time.time() 
     fig, ax = plt.subplots(1,1, figsize=(16, 16))
 
     # Render nodes
-    nodes = get_nodes_coords_from_hash(nodeshash)
+    #nodes = get_nodes_coords_from_hash(nodeshash)
     #plt.scatter(nodes[:, 1], nodes[:, 0], c='blue', alpha=1, s=20)
 
     # Render artificial nodes
     #plt.scatter(artpoints[:, 1], artpoints[:, 0], c='blue', alpha=1, s=20)
 
-    # Render ways
-    colors = {}
+    # Render segments
+    segcolor = 'darkblue'
     i = 0
     maxvalue = np.log(25)
 
-    for wid, wnodes in ways.items():
+    for wid, wnodes in segments.items():
         i += 1
         r = lambda: random.randint(0,255)
         if avgcounts == np.array([]):
-            waycolor = '#%02X%02X%02X' % (r(),r(),r())
+            segcolor = '#%02X%02X%02X' % (r(),r(),r())
         else:
-            #waycolor = '#%02X%02X%02X' % (127, 127, int(50+(avgcounts[wid])*10))
-            waycolor = 'darkblue'
-            #alpha = avgcounts[wid] /1 
             if avgcounts[wid] == 0: alpha = 0
+            elif avgcounts[wid] > maxvalue: alpha = 1
             else: alpha = np.log(avgcounts[wid]) / maxvalue
-            if alpha > 1: alpha = 1
-        colors[wid] = waycolor
+
         lats = []; lons = []
         for nodeid in wnodes:
             a, o = nodeshash[nodeid]
             lats.append(a)
             lons.append(o)
-        ax.plot(lons, lats, linewidth=3, color=waycolor, alpha=alpha)
-
-    # Render queries
-    #for q in queries:
-        #plt.scatter(q[1], q[0], linewidth=2, color=colors[q[2]])
+        ax.plot(lons, lats, linewidth=3, color=segcolor, alpha=alpha)
 
     # Render crossings
     crossingscoords = np.ndarray((len(crossings), 2))
     for j, crossing in enumerate(crossings):
         crossingscoords[j, :] = np.array(nodeshash[crossing])
-
     #plt.scatter(crossingscoords[:, 1], crossingscoords[:, 0], c='black')
+
     ax.axis('equal')
     plt.savefig('/tmp/out.png')
 
@@ -448,6 +441,7 @@ def render_bokeh(nodeshash, ways, crossings, artpoints, counts):
 
     output_file("osm-test.html", title="OSM test")
 
+    debug('Not rendering count yet')
     debug('Finished rendering ({:.3f}s)'.format(time.time() - t0))
     show(p)  # open a browser
 
@@ -494,7 +488,7 @@ def compute_or_load(inputosm, countcsv, outdir):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('inputosm', help='Input osm file')
-    parser.add_argument('countcsv', help='Csv containing the count')
+    parser.add_argument('countcsv', help='Csv containing the count per segment')
     parser.add_argument('outdir', help='Output folder')
     parser.add_argument('--show', help='Show plot (requires display)', action='store_true')
 
@@ -507,7 +501,7 @@ def main():
         compute_or_load(args.inputosm, args.countcsv, args.outdir)
 
     render_map(nodeshash, segments, crossings, artpoints, mycount,
-               args.show, outdir)
+               args.show, args.outdir)
     
 ##########################################################
 if __name__ == '__main__':
