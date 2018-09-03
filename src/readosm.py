@@ -405,7 +405,7 @@ def render_matplotlib(nodeshash, segments, crossings, artpoints, avgcounts, outd
     #plt.scatter(crossingscoords[:, 1], crossingscoords[:, 0], c='black')
 
     ax.axis('equal')
-    plt.savefig('/tmp/out.png')
+    plt.savefig(os.path.join(outdir, 'out.png'))
 
     debug('Finished exporting to image ({:.3f}s)'.format(time.time() - t0))
 
