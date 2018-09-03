@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Parse OSM data
 """
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
 import os
 import numpy as np
@@ -10,7 +13,6 @@ from numpy.linalg import norm as norm
 import argparse
 import xml.etree.ElementTree as ET
 from rtree import index
-import matplotlib.pyplot as plt
 import logging
 from logging import debug, warning
 import random
@@ -90,11 +92,13 @@ def parse_ways(root):
     return ways, invways
 
 ##########################################################
-def render_map(nodeshash, ways, crossings, artpoints, queries, counts, frontend='bokeh'):
-    if frontend == 'matplotlib':
-        render_matplotlib(nodeshash, ways, crossings, artpoints, queries, counts)
+def render_map(nodeshash, segments, crossings, artpoints, counts, show, outdir):
+    if show:
+        debug('Rendering map to screen')
+        render_bokeh(nodeshash, segments, crossings, artpoints, counts)
     else:
-        render_bokeh(nodeshash, ways, crossings, artoints, queries, counts)
+        debug('Rendering map to image')
+        render_matplotlib(nodeshash, segments, crossings, artpoints, counts, outdir)
 
 ##########################################################
 def get_nodes_coords_from_hash(nodeshash):
@@ -315,6 +319,7 @@ def test_query(pointsidx, points):
     debug(elapsed)
 
 def get_count_by_segment(csvinput, segments, pointstree):
+    t0 = time.time()
     fh = open(csvinput)
     fh.readline() # Header
 
@@ -356,10 +361,14 @@ def get_count_by_segment(csvinput, segments, pointstree):
     debug('Max count:{}'.format(maxcount))
     warning('nerrors:{}'.format(nerrors))
     fh.close()
+    debug('Points aggregated ({:.3f}s)'.format(time.time() - t0))
     return counts
 
 ##########################################################
-def render_matplotlib(nodeshash, ways, crossings, artpoints, queries, avgcounts=[]):
+def render_matplotlib(nodeshash, ways, crossings, artpoints, avgcounts, outdir):
+    t0 = time.time() 
+    fig, ax = plt.subplots(1,1, figsize=(16, 16))
+
     # Render nodes
     nodes = get_nodes_coords_from_hash(nodeshash)
     #plt.scatter(nodes[:, 1], nodes[:, 0], c='blue', alpha=1, s=20)
@@ -371,6 +380,7 @@ def render_matplotlib(nodeshash, ways, crossings, artpoints, queries, avgcounts=
     colors = {}
     i = 0
     maxvalue = np.log(25)
+
     for wid, wnodes in ways.items():
         i += 1
         r = lambda: random.randint(0,255)
@@ -380,7 +390,8 @@ def render_matplotlib(nodeshash, ways, crossings, artpoints, queries, avgcounts=
             #waycolor = '#%02X%02X%02X' % (127, 127, int(50+(avgcounts[wid])*10))
             waycolor = 'darkblue'
             #alpha = avgcounts[wid] /1 
-            alpha = np.log(avgcounts[wid]) / maxvalue
+            if avgcounts[wid] == 0: alpha = 0
+            else: alpha = np.log(avgcounts[wid]) / maxvalue
             if alpha > 1: alpha = 1
         colors[wid] = waycolor
         lats = []; lons = []
@@ -388,7 +399,7 @@ def render_matplotlib(nodeshash, ways, crossings, artpoints, queries, avgcounts=
             a, o = nodeshash[nodeid]
             lats.append(a)
             lons.append(o)
-        plt.plot(lons, lats, linewidth=3, color=waycolor, alpha=alpha)
+        ax.plot(lons, lats, linewidth=3, color=waycolor, alpha=alpha)
 
     # Render queries
     #for q in queries:
@@ -400,11 +411,14 @@ def render_matplotlib(nodeshash, ways, crossings, artpoints, queries, avgcounts=
         crossingscoords[j, :] = np.array(nodeshash[crossing])
 
     #plt.scatter(crossingscoords[:, 1], crossingscoords[:, 0], c='black')
-    plt.axis('equal')
-    plt.show()
+    ax.axis('equal')
+    plt.savefig('/tmp/out.png')
+
+    debug('Finished exporting to image ({:.3f}s)'.format(time.time() - t0))
 
 ##########################################################
-def render_bokeh(nodeshash, ways, crossings, artpoints):
+def render_bokeh(nodeshash, ways, crossings, artpoints, counts):
+    t0 = time.time() 
     nodes = get_nodes_coords_from_hash(nodeshash)
 
     from bokeh.plotting import figure, show, output_file
@@ -434,33 +448,12 @@ def render_bokeh(nodeshash, ways, crossings, artpoints):
 
     output_file("osm-test.html", title="OSM test")
 
+    debug('Finished rendering ({:.3f}s)'.format(time.time() - t0))
     show(p)  # open a browser
-    return
-
 
 ##########################################################
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('inputosm', help='Input osm file')
-    parser.add_argument('--checkpointpath', help='Path to the folders to just render')
-    parser.add_argument('--frontend', choices=['bokeh', 'matplotlib'],
-                        help='Front-end vis')
-    parser.add_argument('--verbose', help='verbose', action='store_true')
-
-    args = parser.parse_args()
-
-    #if args.verbose:
-    if True:
-        loglevel = args.verbose if logging.DEBUG else logging.ERROR
-
-    logging.basicConfig(level=loglevel)
-
-
-    tree = ET.parse(args.inputosm)
-    root = tree.getroot() # Tag osm
-
-    outdir = '/tmp/bu'
-    if args.checkpointpath and os.path.exists(args.checkpointpath):
+def compute_or_load(inputosm, countcsv, outdir):
+    if os.path.exists(outdir):
         with open(os.path.join(outdir, 'nodeshash.pkl'), 'rb') as fh:
             nodeshash = pickle.load(fh)
         with open(os.path.join(outdir, 'segments.pkl'), 'rb') as fh:
@@ -471,7 +464,11 @@ def main():
             artpoints = pickle.load(fh)
         with open(os.path.join(outdir, 'mycount.pkl'), 'rb') as fh:
             mycount = pickle.load(fh)
+        debug('Successfully load files from {}'.format(outdir))
     else:
+        os.mkdir(outdir)
+        tree = ET.parse(inputosm)
+        root = tree.getroot() # Tag osm
         ways, invways = parse_ways(root)
         nodeshash = parse_nodes(root, invways)
         ways, invways = filter_out_orphan_nodes(ways, invways, nodeshash)
@@ -480,40 +477,37 @@ def main():
         artpoints = evenly_space_segments(segments, nodeshash)
 
         artpointstree = create_rtree(artpoints, nodeshash, invsegments, invways)
-
-
-        #csvinput = '/home/frodo/projects/timeseries-vis/data/20180901_peds_westvillage_workdays_crs3857_snapped.csv'
-        csvinput = '/home/frodo/projects/timeseries-vis/data/20180901_peds_manhattan_workdays_crs3857_snapped.csv'
-        mycount = get_count_by_segment(csvinput, segments, artpointstree)
+        mycount = get_count_by_segment(countcsv, segments, artpointstree)
         tostore = {'nodeshash': nodeshash,
                    'segments': segments,
                    'crossings': crossings,
                    'artpoints': artpoints,
                    'mycount': mycount}
+
         for filename, item in tostore.items():
             fh = open(os.path.join(outdir, filename + '.pkl'),'wb') 
             pickle.dump(item, fh)
             fh.close()
+    return nodeshash, segments, crossings, artpoints, mycount
 
-    #for nod, val in nodeshash.items():
-        #print(val[0], val[1])
-        #break
+##########################################################
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('inputosm', help='Input osm file')
+    parser.add_argument('countcsv', help='Csv containing the count')
+    parser.add_argument('outdir', help='Output folder')
+    parser.add_argument('--show', help='Show plot (requires display)', action='store_true')
 
-    queried = []
-    #for i in range(1000):
-        #nartpoints, _ = artpoints.shape
-        #idx = np.random.randint(nartpoints)
-        #x = np.random.rand()/1000
-        #y = np.random.rand()/1000
-        #x0 = artpoints[idx, 0] + x
-        #y0 = artpoints[idx, 1] + y
-        #querycoords = (x0, y0, x0, y0)
-        #segid = list(artpointstree.nearest(querycoords, num_results=1, objects='raw'))[0]
-        #queried.append([x0, y0, segid])
+    args = parser.parse_args()
 
-    queried = np.array(queried)
+    logging.basicConfig(level=logging.DEBUG)
 
-    render_map(nodeshash, segments, crossings, artpoints, queried, mycount, args.frontend)
+
+    nodeshash, segments, crossings, artpoints, mycount = \
+        compute_or_load(args.inputosm, args.countcsv, args.outdir)
+
+    render_map(nodeshash, segments, crossings, artpoints, mycount,
+               args.show, outdir)
     
 ##########################################################
 if __name__ == '__main__':
