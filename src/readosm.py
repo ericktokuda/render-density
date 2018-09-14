@@ -2,8 +2,10 @@
 """Parse OSM data
 """
 import matplotlib
-matplotlib.use('Agg')
+#matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import matplotlib.colors as colors
+plt.style.use('ggplot')
 
 import os
 import numpy as np
@@ -18,6 +20,11 @@ from logging import debug, warning
 import random
 import time
 import pickle
+
+import concurrent.futures
+import scipy.spatial
+from pyproj import Proj, transform
+
 
 ########################################################## DEFS
 WAY_TYPES = ["motorway", "trunk", "primary", "secondary", "tertiary",
@@ -255,6 +262,8 @@ def evenly_space_segment(segment, nodeshash, epsilon):
         prevnode = node
     return np.array(points)
 
+
+
 ##########################################################
 def evenly_space_segments(segments, nodeshash, epsilon=0.0001):
     """Evenly space all segments and create artificial points
@@ -280,31 +289,7 @@ def evenly_space_segments(segments, nodeshash, epsilon=0.0001):
     debug('New {} support points ({:.3f}s)'.format(idx, time.time() - t0))
     return points[:idx, :]
 
-##########################################################
-def create_rtree(points, nodeshash, invsegments, invways):
-    """short-description
 
-    Args:
-    params
-
-    Returns:
-    ret
-
-    Raises:
-    """
-
-    t0 = time.time()
-    pointsidx = index.Index()
-
-    for pid, p in enumerate(points):
-        lat, lon  = p[0:2]
-        sid = int(p[2])
-        pointsidx.insert(pid, (lat, lon, lat, lon), sid)
-        #debug('pid:{}, {}, {}'.format(pid, lat, lon))
-    
-    debug('R-tree created ({:.3f}s)'.format(time.time() - t0))
-
-    return pointsidx
 
 ##########################################################
 def test_query(pointsidx, points):
@@ -318,7 +303,14 @@ def test_query(pointsidx, points):
     elapsed = time.time() - t0
     debug(elapsed)
 
-def get_count_by_segment(csvinput, segments, pointstree):
+def get_count_by_segment(csvinput, segments,artpoints):
+    
+    
+    t0 = time.time()
+    artpointstree = scipy.spatial.cKDTree(artpoints[:,:2]) 
+
+    debug('cKDTree created ({:.3f}s)'.format(time.time() - t0))
+    
     t0 = time.time()
     fh = open(csvinput)
     fh.readline() # Header
@@ -329,30 +321,62 @@ def get_count_by_segment(csvinput, segments, pointstree):
     denom = np.zeros(nsegments)
     #denom = np.ones(nsegments)
 
-    from pyproj import Proj, transform
     inProj = Proj(init='epsg:3857')
     outProj = Proj(init='epsg:4326')
 
     nerrors = 0
     maxcount = 0
+    
+        
+    #t0 = time.time()
+    
+    querycoords = []
+    local_counts = []
+    
+    lats = []
+    longs = []
+    
     for i, line in enumerate(fh):
+        #t1=time.time()
+        #if i % 1000000:
+        #    print(i,(t1-t0)/i)
         arr = line.split(',')
         count = int(arr[1])
         if not arr[2]:
             nerrors += 1
             continue
-        lon = float(arr[2])
-        lat = float(arr[3])
-        lon, lat = transform(inProj,outProj,lon,lat)
-        if count > maxcount: maxcount = count
+        longs.append(float(arr[2]))
+        lats.append(float(arr[3]))
+        local_counts.append(count)
+        
+    longs = np.array(longs)
+    lats = np.array(lats)     
+        
+    longs, lats = transform(inProj,outProj,longs,lats)
+    if count > maxcount: maxcount = count
 
-        querycoords = (lat, lon, lat, lon) 
-        sid = list(pointstree.nearest(querycoords, num_results=1, objects='raw'))[0]
+    querycoords = np.hstack( (lats[:,None],longs[:,None]) ) #.append( (lat, lon) ) 
+    _,artids = artpointstree.query(querycoords, k=1, n_jobs=-1)
+    sids = artpoints[artids,2]
+    
+    for idx in range(len(sids)):
+        counts[int(sids[idx])] += local_counts[idx]
+        denom[int(sids[idx])] += 1
 
-        counts[sid] += count
-        denom[sid] += 1
+        
+        #if len(querycoords) > 100000:
+        #    process_point_set(querycoords,local_counts)
+        #    querycoords = []
+        #    local_counts = []
+        
 
-        #if i > 10000: break
+    #if len(querycoords) > 0:
+    #    process_point_set(querycoords,local_counts)
+    #    querycoords = []
+    #    local_counts = []
+    
+
+        
 
     for i in range(nsegments):
         if denom[i] > 0:
@@ -364,10 +388,12 @@ def get_count_by_segment(csvinput, segments, pointstree):
     debug('Points aggregated ({:.3f}s)'.format(time.time() - t0))
     return counts
 
+
+
 ##########################################################
 def render_matplotlib(nodeshash, segments, crossings, artpoints, avgcounts, outdir):
     t0 = time.time() 
-    fig, ax = plt.subplots(1,1, figsize=(16, 16))
+    fig, ax = plt.subplots(1,1, figsize=(4.5, 16))
 
     # Render nodes
     #nodes = get_nodes_coords_from_hash(nodeshash)
@@ -380,32 +406,68 @@ def render_matplotlib(nodeshash, segments, crossings, artpoints, avgcounts, outd
     segcolor = 'darkblue'
     i = 0
     maxvalue = np.log(25)
+    
+    angle = 0.62
+    rot = np.array( [[np.cos(angle),np.sin(angle)],[-np.sin(angle),np.cos(angle)]])
+
+    lines = []
+    values = []
 
     for wid, wnodes in segments.items():
         i += 1
-        r = lambda: random.randint(0,255)
-        if avgcounts == np.array([]):
-            segcolor = '#%02X%02X%02X' % (r(),r(),r())
-        else:
-            if avgcounts[wid] == 0: alpha = 0
-            elif avgcounts[wid] > maxvalue: alpha = 1
-            else: alpha = np.log(avgcounts[wid]) / maxvalue
+        #r = lambda: random.randint(0,255)
+        #if avgcounts == np.array([]):
+        #    segcolor = '#%02X%02X%02X' % (r(),r(),r())
+        #else:
+        #    if avgcounts[wid] == 0: alpha = 0
+        #    elif avgcounts[wid] > maxvalue: alpha = 1
+        #    else: alpha = np.log(avgcounts[wid]) / maxvalue
 
+        
         lats = []; lons = []
         for nodeid in wnodes:
             a, o = nodeshash[nodeid]
             lats.append(a)
             lons.append(o)
-        ax.plot(lons, lats, linewidth=3, color=segcolor, alpha=alpha)
+        lines.append( np.dot(np.column_stack([lons,lats]),rot) )
+        values.append(avgcounts[wid])
+        
+    values = np.array(values)
+    ## Render crossings
+    #crossingscoords = np.ndarray((len(crossings), 2))
+    #for j, crossing in enumerate(crossings):
+    #    crossingscoords[j, :] = np.array(nodeshash[crossing])
+    ##plt.scatter(crossingscoords[:, 1], crossingscoords[:, 0], c='black')
 
-    # Render crossings
-    crossingscoords = np.ndarray((len(crossings), 2))
-    for j, crossing in enumerate(crossings):
-        crossingscoords[j, :] = np.array(nodeshash[crossing])
-    #plt.scatter(crossingscoords[:, 1], crossingscoords[:, 0], c='black')
+    from matplotlib.collections import LineCollection
+    line_segments = LineCollection(lines,
+                                   #linewidths=(0.5, 1, 1.5, 2),
+                                   linestyles='solid',
+                                   norm=colors.LogNorm(np.min(10*values[values>0]),np.max(values)),
+                                   cmap = plt.get_cmap() )
+    line_segments.set_array(values)
+    ax.add_collection(line_segments)
+    axcb = fig.colorbar(line_segments,aspect=50)
+    axcb.set_label('Relative Pedestrian Density',size=15)
 
-    ax.axis('equal')
-    plt.savefig(os.path.join(outdir, 'out.png'))
+
+    #ax.axis('equal')
+    ax.axis('off')
+    plt.tight_layout()
+    plt.sci(line_segments)
+    
+    min_ax = min( np.min(l[:,0]) for l in lines  )
+    max_ax = max( np.max(l[:,0]) for l in lines  )
+    
+    ax.set_xlim(min_ax, max_ax)
+    
+    min_ay = min( np.min(l[:,1]) for l in lines  )
+    max_ay = max( np.max(l[:,1]) for l in lines  )
+    
+    
+    ax.set_ylim(min_ay, max_ay)
+    
+    plt.savefig(os.path.join(outdir, 'test_new_map.png'))
 
     debug('Finished exporting to image ({:.3f}s)'.format(time.time() - t0))
 
@@ -470,8 +532,7 @@ def compute_or_load(inputosm, countcsv, outdir):
         segments, invsegments = get_segments(ways, crossings)
         artpoints = evenly_space_segments(segments, nodeshash)
 
-        artpointstree = create_rtree(artpoints, nodeshash, invsegments, invways)
-        mycount = get_count_by_segment(countcsv, segments, artpointstree)
+        mycount = get_count_by_segment(countcsv, segments,artpoints)
         tostore = {'nodeshash': nodeshash,
                    'segments': segments,
                    'crossings': crossings,
@@ -484,8 +545,9 @@ def compute_or_load(inputosm, countcsv, outdir):
             fh.close()
     return nodeshash, segments, crossings, artpoints, mycount
 
+
 ##########################################################
-def main():
+if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('inputosm', help='Input osm file')
     parser.add_argument('countcsv', help='Csv containing the count per segment')
@@ -502,8 +564,3 @@ def main():
 
     render_map(nodeshash, segments, crossings, artpoints, mycount,
                args.show, args.outdir)
-    
-##########################################################
-if __name__ == '__main__':
-    main()
-
