@@ -26,6 +26,9 @@ from scipy.spatial import ConvexHull
 import concurrent.futures
 import scipy.spatial
 from pyproj import Proj, transform
+from shapely.geometry import Point
+from shapely.geometry.polygon import Polygon
+from shapely.geometry import MultiPoint
 
 
 ########################################################## DEFS
@@ -36,19 +39,35 @@ MAX_ARRAY_SZ = 1048576  # 2^20
 intersection_delta = 1e-4
 
 ##########################################################
-def parse_nodes(root, invways):
-    """Get all nodes in the xml struct
+def parse_nodes(root, invways, csvinput=None):
+    """Get all nodes in the xml struct. If we pass csvinput, then it bounds osm
+    structures by the points in the csv provided
 
     Args:
     root(ET): root element 
     invways(dict): inverted list of ways, i.e., node as key and list of way ids as values
-
-    Returns:
-
+    csvinput(str): csv path containing the points to get the convex hull
     """
+
     t0 = time.time() 
     valid = invways.keys()
     nodeshash = {}
+    poly = Point()
+
+    if csvinput:
+        hullpoints = np.ndarray((2000000, 2))
+        fh = open(csvinput)
+        fh.readline() # Header
+        acc = 0
+        for line in fh:
+            arr = line.split(',')
+            hullpoints[acc, 0] = float(arr[3]) 
+            hullpoints[acc, 1] = float(arr[2])
+            acc += 1
+        fh.close()
+        hullpoints = hullpoints[:acc, :]
+        poly = MultiPoint(hullpoints).convex_hull
+        debug('Convex hull created')
 
     for child in root:
         if child.tag != 'node': continue # not node
@@ -56,10 +75,11 @@ def parse_nodes(root, invways):
 
         att = child.attrib
         lat, lon = float(att['lat']), float(att['lon'])
+        p = Point(lat, lon)
+        if csvinput and not p.within(poly): continue
         nodeshash[int(att['id'])] = (lat, lon)
     debug('Found {} (traversable) nodes ({:.3f}s)'.format(len(nodeshash.keys()),
                                                           time.time() - t0))
-
     return nodeshash
 
 ##########################################################
@@ -168,22 +188,22 @@ def filter_out_orphan_nodes(ways, invways, nodeshash):
     if ninvways == nnodeshash: return ways, invways
 
     validnodes = set(nodeshash.keys())
-
+    
     # Filter ways
+    newways = {}
     for wayid, nodes in ways.items():
         newlist = [ nodeid for nodeid in nodes if nodeid in validnodes ]
-        ways[wayid] = newlist
+        if not newlist: continue
+        newways[wayid] = newlist
         
     # Filter invways
-    invwaysnodes = set(invways.keys())
-    invalid = invwaysnodes.difference(validnodes)
+    newinvways = {}
+    for nodeid, ways in invways.items():
+        if nodeid not in validnodes: continue
+        newinvways[nodeid] = ways
 
-    for nodeid in invalid:
-        del invways[nodeid]
-
-    ninvways = len(invways.keys())
     debug('Filtered {} orphan nodes.'.format(ninvways - nnodeshash))
-    return ways, invways
+    return newways, newinvways
 
 ##########################################################
 def get_segments(ways, crossings):
@@ -318,40 +338,44 @@ def test_query(pointsidx, points):
 def get_count_by_segment(csvinput, segments,artpoints,crossing_points):
     
     
+    ##########################################################
 
-    ##########################################################
-    # get convex hull
-    hullpoints = np.ndarray((2000000, 2))
-    fh = open(csvinput)
-    fh.readline() # Header
-    #imageid,n,x,y,t
-    acc = 0
-    for line in fh:
-        arr = line.split(',')
-        hullpoints[acc, 0] = float(arr[2]) 
-        hullpoints[acc, 1] = float(arr[3])
-        acc += 1
-    fh.close()
-    hullpoints = hullpoints[:acc, :]
-    input(hullpoints)
-    hull = ConvexHull(hullpoints)
-    ##########################################################
-    from shapely.geometry import Point
-    from shapely.geometry.polygon import Polygon
+    #hullpoints = np.ndarray((2000000, 2))
+    #fh = open(csvinput)
+    #fh.readline() # Header
+    #acc = 0
+    #for line in fh:
+        #arr = line.split(',')
+        #hullpoints[acc, 0] = float(arr[2]) 
+        #hullpoints[acc, 1] = float(arr[3])
+        #acc += 1
+    #fh.close()
+    #hullpoints = hullpoints[:acc, :]
+    #from shapely.geometry import MultiPoint
+    #poly = MultiPoint(hullpoints).convex_hull
+    #debug('convex hull created')
 
-    hullpolygon = Polygon(hull.points)
-    
-    ##########################################################
-    # filter artpoints
-    validindices = []
-    for j, artpoint in enumerate(artpoints):
-        #input(artpoint)
-        p = Point(artpoint[1], artpoint[0])
-        if not hullpolygon.contains(p): continue
-        validindices.append(j)
-    input(artpoints.shape)
-    input(len(validindices))
-    artpoints = artpoints[validindices, :]
+    #from shapely.geometry import Point
+    #from shapely.geometry.polygon import Polygon
+
+    #validindices = []
+    #for j, artpoint in enumerate(artpoints):
+        #debug('evaluating in/outside point {}'.format(j))
+        #p = Point(artpoint[1], artpoint[0])
+        #if not p.within(poly): continue
+        #validindices.append(j)
+    #artpoints = artpoints[validindices, :]
+
+    #validindices = []
+    #for j, crsp in enumerate(crossing_points):
+        #debug('evaluating in/outside point {}'.format(j))
+        #p = Point(crsp[1], crsp[0])
+        #if not p.within(poly): continue
+        #validindices.append(j)
+    #input(crossing_points.shape)
+    #input(len(validindices))
+    #crossing_points = crossing_points[validindices, :]
+    #input(crossing_points.shape)
 
     ##########################################################
 
@@ -457,7 +481,7 @@ def render_matplotlib(nodeshash, segments, crossings, artpoints,crossing_points,
                       avgcounts,intersection_counts, outdir,
                       logplot=False,xlim=None,ylim=None):
     t0 = time.time() 
-    fig, ax = plt.subplots(1,1, figsize=(4.5, 16))
+    fig, ax = plt.subplots(1,1, figsize=(16, 14))
 
     # Render nodes
     #nodes = get_nodes_coords_from_hash(nodeshash)
@@ -653,7 +677,7 @@ def compute_or_load(inputosm, countcsv, outdir):
         tree = ET.parse(inputosm)
         root = tree.getroot() # Tag osm
         ways, invways = parse_ways(root)
-        nodeshash = parse_nodes(root, invways)
+        nodeshash = parse_nodes(root, invways, countcsv)
         ways, invways = filter_out_orphan_nodes(ways, invways, nodeshash)
         crossings = get_crossings(invways)
         segments, invsegments = get_segments(ways, crossings)
