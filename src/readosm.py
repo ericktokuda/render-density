@@ -20,6 +20,8 @@ from logging import debug, warning
 import random
 import time
 import pickle
+from scipy.spatial import ConvexHull
+#points = np.random.rand(30, 2)   # 30 random points in 2-D
 
 import concurrent.futures
 import scipy.spatial
@@ -30,6 +32,8 @@ from pyproj import Proj, transform
 WAY_TYPES = ["motorway", "trunk", "primary", "secondary", "tertiary",
              "unclassified", "residential", "service", "living_street"]
 MAX_ARRAY_SZ = 1048576  # 2^20
+
+intersection_delta = 1e-4
 
 ##########################################################
 def parse_nodes(root, invways):
@@ -99,13 +103,13 @@ def parse_ways(root):
     return ways, invways
 
 ##########################################################
-def render_map(nodeshash, segments, crossings, artpoints, counts, show, outdir):
+def render_map(nodeshash, segments, crossings, artpoints,crossing_points,counts,intersection_counts, show, outdir):
     if show:
         debug('Rendering map to screen')
         render_bokeh(nodeshash, segments, crossings, artpoints, counts)
     else:
         debug('Rendering map to image')
-        render_matplotlib(nodeshash, segments, crossings, artpoints, counts, outdir)
+        render_matplotlib(nodeshash, segments, crossings, artpoints,crossing_points,counts,intersection_counts,outdir)
 
 ##########################################################
 def get_nodes_coords_from_hash(nodeshash):
@@ -289,7 +293,15 @@ def evenly_space_segments(segments, nodeshash, epsilon=0.0001):
     debug('New {} support points ({:.3f}s)'.format(idx, time.time() - t0))
     return points[:idx, :]
 
-
+###########################################################
+def get_crossing_points(crossings,nodeshash):
+    locations = []
+    
+    for nid in crossings:
+        locations.append(np.array(nodeshash[nid]))
+    
+    return np.array(locations)
+    
 
 ##########################################################
 def test_query(pointsidx, points):
@@ -303,26 +315,61 @@ def test_query(pointsidx, points):
     elapsed = time.time() - t0
     debug(elapsed)
 
-def get_count_by_segment(csvinput, segments,artpoints):
+def get_count_by_segment(csvinput, segments,artpoints,crossing_points):
     
     
+
+    ##########################################################
+    # get convex hull
+    hullpoints = np.ndarray((2000000, 2))
+    fh = open(csvinput)
+    fh.readline() # Header
+    #imageid,n,x,y,t
+    acc = 0
+    for line in fh:
+        arr = line.split(',')
+        hullpoints[acc, 0] = float(arr[2]) 
+        hullpoints[acc, 1] = float(arr[3])
+        acc += 1
+    fh.close()
+    hullpoints = hullpoints[:acc, :]
+    input(hullpoints)
+    hull = ConvexHull(hullpoints)
+    ##########################################################
+    from shapely.geometry import Point
+    from shapely.geometry.polygon import Polygon
+
+    hullpolygon = Polygon(hull.points)
+    
+    ##########################################################
+    # filter artpoints
+    validindices = []
+    for j, artpoint in enumerate(artpoints):
+        #input(artpoint)
+        p = Point(artpoint[1], artpoint[0])
+        if not hullpolygon.contains(p): continue
+        validindices.append(j)
+    input(artpoints.shape)
+    input(len(validindices))
+    artpoints = artpoints[validindices, :]
+
+    ##########################################################
+
     t0 = time.time()
-    artpointstree = scipy.spatial.cKDTree(artpoints[:,:2]) 
+
+    artpointstree = scipy.spatial.cKDTree(artpoints[:, :2]) 
+    crossing_pointstree = scipy.spatial.cKDTree(crossing_points[:,:2]) 
 
     debug('cKDTree created ({:.3f}s)'.format(time.time() - t0))
     
+    ##########################################################
     t0 = time.time()
     fh = open(csvinput)
     fh.readline() # Header
 
     #imageid,n,x,y,t
-    nsegments = len(segments.keys())
-    counts = np.zeros(nsegments)
-    denom = np.zeros(nsegments)
-    #denom = np.ones(nsegments)
 
-    inProj = Proj(init='epsg:3857')
-    outProj = Proj(init='epsg:4326')
+    #denom = np.ones(nsegments)
 
     nerrors = 0
     maxcount = 0
@@ -352,16 +399,29 @@ def get_count_by_segment(csvinput, segments,artpoints):
     longs = np.array(longs)
     lats = np.array(lats)     
         
-    longs, lats = transform(inProj,outProj,longs,lats)
     if count > maxcount: maxcount = count
 
     querycoords = np.hstack( (lats[:,None],longs[:,None]) ) #.append( (lat, lon) ) 
     _,artids = artpointstree.query(querycoords, k=1, n_jobs=-1)
+    crossing_distance,corssing_index = crossing_pointstree.query(querycoords, k=1, n_jobs=-1)
     sids = artpoints[artids,2]
     
-    for idx in range(len(sids)):
-        counts[int(sids[idx])] += local_counts[idx]
-        denom[int(sids[idx])] += 1
+    
+    nsegments = len(segments.keys())
+    counts = np.zeros(nsegments)
+    denom = np.zeros(nsegments)
+    
+    nintersections = crossing_points.shape[0]
+    intersection_counts = np.zeros(nintersections)
+    intersection_denom = np.zeros(nintersections)
+    
+    for idx in range(querycoords.shape[0]):
+        if crossing_distance[idx] < intersection_delta:
+            intersection_counts[int(corssing_index[idx])] += local_counts[idx]
+            intersection_denom[int(corssing_index[idx])] += 1
+        else:    
+            counts[int(sids[idx])] += local_counts[idx]
+            denom[int(sids[idx])] += 1
 
         
         #if len(querycoords) > 100000:
@@ -374,24 +434,28 @@ def get_count_by_segment(csvinput, segments,artpoints):
     #    process_point_set(querycoords,local_counts)
     #    querycoords = []
     #    local_counts = []
-    
-
-        
 
     for i in range(nsegments):
         if denom[i] > 0:
             counts[i] /= denom[i]
+            
+    for i in range(nintersections):
+        if intersection_denom[i] > 0:
+            intersection_counts[i] /= intersection_denom[i]           
+            
     debug(np.max(counts))
     debug('Max count:{}'.format(maxcount))
     warning('nerrors:{}'.format(nerrors))
     fh.close()
     debug('Points aggregated ({:.3f}s)'.format(time.time() - t0))
-    return counts
+    return counts, intersection_counts
 
 
 
 ##########################################################
-def render_matplotlib(nodeshash, segments, crossings, artpoints, avgcounts, outdir):
+def render_matplotlib(nodeshash, segments, crossings, artpoints,crossing_points,
+                      avgcounts,intersection_counts, outdir,
+                      logplot=False,xlim=None,ylim=None):
     t0 = time.time() 
     fig, ax = plt.subplots(1,1, figsize=(4.5, 16))
 
@@ -412,6 +476,10 @@ def render_matplotlib(nodeshash, segments, crossings, artpoints, avgcounts, outd
 
     lines = []
     values = []
+    min_lats = []
+    max_lats = []
+    min_lons = []
+    max_lons = []
 
     for wid, wnodes in segments.items():
         i += 1
@@ -429,42 +497,97 @@ def render_matplotlib(nodeshash, segments, crossings, artpoints, avgcounts, outd
             a, o = nodeshash[nodeid]
             lats.append(a)
             lons.append(o)
-        lines.append( np.dot(np.column_stack([lons,lats]),rot) )
+            
+        rotated_vals = np.dot(np.column_stack([lons,lats]),rot) 
+
+        lines.append( rotated_vals )
         values.append(avgcounts[wid])
+        min_lats.append(np.min(rotated_vals[:,1]))
+        max_lats.append(np.max(rotated_vals[:,1]))
+        min_lons.append(np.min(rotated_vals[:,0]))
+        max_lons.append(np.max(rotated_vals[:,0]))
         
     values = np.array(values)
+    min_lats = np.array(min_lats)
+    max_lats = np.array(max_lats)
+    min_lons = np.array(min_lons)
+    max_lons = np.array(max_lons)
+    
+    if xlim is None:
+        min_ax = min( np.min(l[:,0]) for l in lines  )
+        max_ax = max( np.max(l[:,0]) for l in lines  )
+    else:
+        min_ax = xlim[0]
+        max_ax = xlim[1]
+    
+    if ylim is None:
+        min_ay = min( np.min(l[:,1]) for l in lines  )
+        max_ay = max( np.max(l[:,1]) for l in lines  )
+    else:
+        min_ay = ylim[0]
+        max_ay = ylim[1]
+        
+    #values_to_mesure = np.logical_and(values>0 ,
+    #                        np.logical_and(
+    #                            np.logical_and(min_ay <= max_lats,max_ay >= min_lats),
+    #                            np.logical_and(min_ax <= max_lons,max_ax >= min_lons)))
+    values_to_mesure = values>0 
+    
     ## Render crossings
     #crossingscoords = np.ndarray((len(crossings), 2))
     #for j, crossing in enumerate(crossings):
     #    crossingscoords[j, :] = np.array(nodeshash[crossing])
     ##plt.scatter(crossingscoords[:, 1], crossingscoords[:, 0], c='black')
 
+    low_percentile = np.percentile(values[values_to_mesure],1.0)
+    high_percentile = np.percentile(values[values_to_mesure],99.0)
+    print(low_percentile,high_percentile)
+    if logplot:
+        cnorm = colors.LogNorm(low_percentile,high_percentile)
+    else:
+        cnorm = colors.Normalize(low_percentile,high_percentile)
+        
+    cmap = plt.get_cmap()
+    cmap.set_under(cmap(0))
+    cmap.set_bad(cmap(0))
+    cmap.set_over(cmap(1))
+    
     from matplotlib.collections import LineCollection
     line_segments = LineCollection(lines,
                                    #linewidths=(0.5, 1, 1.5, 2),
                                    linestyles='solid',
-                                   norm=colors.LogNorm(np.min(10*values[values>0]),np.max(values)),
-                                   cmap = plt.get_cmap() )
+                                   norm=cnorm,
+                                   cmap = cmap )
     line_segments.set_array(values)
     ax.add_collection(line_segments)
-    axcb = fig.colorbar(line_segments,aspect=50)
+    axcb = fig.colorbar(line_segments,aspect=50,orientation='vertical')
     axcb.set_label('Relative Pedestrian Density',size=15)
 
+    crossing_points_rot = np.dot(crossing_points,rot.T)
+    plt.scatter(crossing_points_rot[:,1],crossing_points_rot[:,0],s=16,
+                c=intersection_counts,cmap=cmap,norm=cnorm)
+    
+    
+    from matplotlib.collections import PatchCollection
+    from matplotlib.patches import Circle
+    
+    
+    #patches = [Circle((crossing_points_rot[i,1],crossing_points_rot[i,0]),intersection_delta,
+    #                  alpha=1,edgecolor='black',facecolor='none',fill=False,linewidth=4) 
+    #                    for i in range(crossing_points_rot.shape[0])]
+    
 
+    #p = PatchCollection(patches,match_original=True)
+    #ax.add_collection(p)
+    
     #ax.axis('equal')
     ax.axis('off')
     plt.tight_layout()
     plt.sci(line_segments)
     
-    min_ax = min( np.min(l[:,0]) for l in lines  )
-    max_ax = max( np.max(l[:,0]) for l in lines  )
-    
+
+        
     ax.set_xlim(min_ax, max_ax)
-    
-    min_ay = min( np.min(l[:,1]) for l in lines  )
-    max_ay = max( np.max(l[:,1]) for l in lines  )
-    
-    
     ax.set_ylim(min_ay, max_ay)
     
     plt.savefig(os.path.join(outdir, 'test_new_map.png'))
@@ -518,8 +641,12 @@ def compute_or_load(inputosm, countcsv, outdir):
             crossings = pickle.load(fh)
         with open(os.path.join(outdir, 'artpoints.pkl'), 'rb') as fh:
             artpoints = pickle.load(fh)
+        with open(os.path.join(outdir, 'crossing_points.pkl'), 'rb') as fh:
+            crossing_points = pickle.load(fh)            
         with open(os.path.join(outdir, 'mycount.pkl'), 'rb') as fh:
             mycount = pickle.load(fh)
+        with open(os.path.join(outdir, 'intersection_counts.pkl'), 'rb') as fh:
+            intersection_counts = pickle.load(fh)
         debug('Successfully load files from {}'.format(outdir))
     else:
         os.mkdir(outdir)
@@ -531,19 +658,22 @@ def compute_or_load(inputosm, countcsv, outdir):
         crossings = get_crossings(invways)
         segments, invsegments = get_segments(ways, crossings)
         artpoints = evenly_space_segments(segments, nodeshash)
+        crossing_points = get_crossing_points(crossings,nodeshash)
 
-        mycount = get_count_by_segment(countcsv, segments,artpoints)
+        mycount,intersection_counts = get_count_by_segment(countcsv, segments,artpoints,crossing_points)
         tostore = {'nodeshash': nodeshash,
                    'segments': segments,
                    'crossings': crossings,
                    'artpoints': artpoints,
-                   'mycount': mycount}
+                   'crossing_points': crossing_points,
+                   'mycount': mycount,
+                   'intersection_counts': intersection_counts}
 
         for filename, item in tostore.items():
             fh = open(os.path.join(outdir, filename + '.pkl'),'wb') 
             pickle.dump(item, fh)
             fh.close()
-    return nodeshash, segments, crossings, artpoints, mycount
+    return nodeshash, segments, crossings, artpoints, crossing_points, mycount, intersection_counts
 
 
 ##########################################################
@@ -559,8 +689,11 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
 
 
-    nodeshash, segments, crossings, artpoints, mycount = \
+    nodeshash, segments, crossings, artpoints,crossing_points, mycount,intersection_counts = \
         compute_or_load(args.inputosm, args.countcsv, args.outdir)
 
-    render_map(nodeshash, segments, crossings, artpoints, mycount,
-               args.show, args.outdir)
+    xlim = None#(-83.9026,-83.8914)
+    ylim = None#(-9.7359,-9.76126)
+
+    render_matplotlib(nodeshash, segments, crossings, artpoints,crossing_points,mycount,
+                      intersection_counts,args.outdir,logplot=True,xlim=xlim,ylim=ylim)
