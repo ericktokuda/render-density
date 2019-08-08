@@ -30,13 +30,102 @@ from pyproj import Proj, transform
 import collections
 
 ########################################################## DEFS
-WAY_TYPES = ['motorway', 'trunk', 'primary', 'secondary', 'tertiary',
-             'unclassified', 'residential', 'service', 'living_street']
 MAX_ARRAY_SZ = 1048576  # 2^20
 
 intersection_delta = 1e-4
 VARS = ['nodes', 'segments', 'crossings', 'artpoints', 'crossing_points',
-        'extradata', 'segcounts', 'intersection_counts']
+        'regions', 'segcounts', 'intersection_counts']
+
+WAY_TYPES = ['motorway', 'trunk', 'primary', 'secondary', 'tertiary',
+             'unclassified', 'residential', 'service', 'living_street']
+ROI = {
+    'road': {'k': 'highway', 'v': WAY_TYPES, 'c': 'darkgray', 'z': 0},
+    'building': {'k': 'building', 'v': ['yes'], 'c': 'gray', 'z': 0},
+    'park': {'k': 'leisure', 'v': ['park'], 'c': 'lightgreen', 'z': 1},
+    'water': {'k': 'landuse', 'v': ['reservoir'], 'c': 'skyblue', 'z': 2},
+       }
+    # 'hospital': {'k': 'amenity', 'v': ['hospital'], 'c': 'red', 'z': 2},
+##########################################################
+
+##########################################################
+def compute_or_load(inputosm, countcsv, outdir):
+    d = {}
+
+    if os.path.exists(outdir):
+        debug('Output path {} exists. Loading files...'.format(outdir))
+        for var in VARS:
+            with open(os.path.join(outdir, var + '.pkl'), 'rb') as fh:
+                d[var] = pickle.load(fh)
+        debug('Successfully load files from {}'.format(outdir))
+    else:
+        os.mkdir(outdir)
+        tree = ET.parse(inputosm)
+        root = tree.getroot() # Tag osm
+        ways, invways, d['regions'] = parse_ways(root)
+        d['nodes'] = parse_nodes(root)
+        ways, invways = filter_out_orphan_nodes(ways, invways, d['nodes'])
+        d['crossings'] = get_crossings(invways)
+        d['segments'], invsegments = get_segments(ways, d['crossings'])
+        d['artpoints'] = evenly_space_segments(d['segments'], d['nodes'])
+        d['crossing_points'] = get_crossing_points_numpy(d['crossings'], d['nodes'])
+        s, i = get_count_by_segment(countcsv, d['segments'], d['artpoints'],
+                                    d['crossing_points'])
+        d['segcounts'], d['intersection_counts'] = s, i
+
+        for v in VARS:
+            fh = open(os.path.join(outdir, v + '.pkl'), 'wb')
+            pickle.dump(d[v], fh)
+            fh.close()
+    return d
+
+##########################################################
+def parse_ways(root):
+    """Get all ways in the xml struct. We are interested in two types of ways: streets
+    and regions of interest
+
+    Args:
+    root(ET): root element
+
+    Returns:
+    dict of list: hash of wayid as key and list of nodes as values;
+    dict of list: hash of nodeid as key and list of wayids as values;
+    dict of dict of list: hash of regiontype as 
+    """
+
+    t0 = time.time()
+    ways = {}
+    invways = {}
+    regions = {r: {} for r in ROI.keys()}
+
+    for way in root:
+        if way.tag != 'way': continue
+
+        wayid = int(way.attrib['id'])
+        isstreet = False
+        regiontype = None
+
+        nodes = []
+        for child in way:
+            if child.tag == 'nd':
+                nodes.append(int(child.attrib['ref']))
+            elif child.tag == 'tag':
+                for k, r in ROI.items():
+                    if child.attrib['k'] == r['k'] and child.attrib['v'] in r['v']:
+                        regiontype = k
+                        break
+
+        if regiontype is None: continue
+
+        if regiontype == 'road':
+            ways[wayid] = nodes
+            for node in nodes: # Create inverted index of ways
+                if node in invways.keys(): invways[node].append(wayid)
+                else: invways[node] = [wayid]
+        else:
+            regions[regiontype][wayid] = nodes  # Regions of interest
+
+    debug('Found {} ways ({:.3f}s)'.format(len(ways.keys()), time.time() - t0))
+    return ways, invways, regions
 
 ##########################################################
 def parse_nodes(root):#, invways):
@@ -53,67 +142,11 @@ def parse_nodes(root):#, invways):
 
     for child in root:
         if child.tag != 'node': continue # not node
-        #if int(child.attrib['id']) not in valid: continue # non relevant node
         att = child.attrib
-
-        lat, lon = float(att['lat']), float(att['lon'])
-        nodes[int(att['id'])] = (lat, lon)
+        nodes[int(att['id'])] = (float(att['lat']), float(att['lon']))
     debug('Found {} (traversable) nodes ({:.3f}s)'.format(len(nodes.keys()),
                                                           time.time() - t0))
     return nodes
-
-##########################################################
-def parse_ways(root):
-    """Get all ways in the xml struct
-
-    Args:
-    root(ET): root element
-
-    Returns:
-    dict of list: hash of wayids as key and list of nodes as values;
-    dict of list: hash of nodeid as key and list of wayids as values;
-    """
-
-    t0 = time.time()
-    ways = {}
-    invways = {} # inverted list of ways
-    extradata = collections.defaultdict(dict)
-
-    for way in root:
-        if way.tag != 'way': continue
-        wayid = int(way.attrib['id'])
-        isstreet = False
-        regiontype = None
-        nodes = []
-
-        nodes = []
-        for child in way:
-            if child.tag == 'nd':
-                nodes.append(int(child.attrib['ref']))
-            elif child.tag == 'tag':
-                if child.attrib['k'] == 'highway' and child.attrib['v'] in WAY_TYPES:
-                    isstreet = True
-                elif child.attrib['k'] == 'building' and child.attrib['v'] =='yes':
-                    regiontype  = 'building'
-                elif child.attrib['k'] == 'leisure' and child.attrib['v'] =='park':
-                    regiontype  = 'park'
-                elif child.attrib['k'] == 'natural' and child.attrib['v'] =='water':
-                    regiontype  = 'water'
-                elif child.attrib['k'] == 'landuse' and child.attrib['v'] =='reservoir':
-                    regiontype  = 'water'
-        if isstreet:
-            ways[wayid] = nodes
-
-            for node in nodes:
-                if node in invways.keys(): invways[node].append(wayid)
-                else: invways[node] = [wayid]
-        elif regiontype is not None:
-            print(regiontype)
-            extradata[regiontype][wayid] = nodes
-            print(nodes)
-
-    debug('Found {} ways ({:.3f}s)'.format(len(ways.keys()), time.time() - t0))
-    return ways, invways, extradata
 
 ##########################################################
 def get_crossings(invways):
@@ -280,7 +313,7 @@ def evenly_space_segments(segments, nodes, epsilon=0.0001):
     return points[:idx, :]
 
 ###########################################################
-def get_crossing_points(crossings,nodes):
+def get_crossing_points_numpy(crossings, nodes):
     locations = []
 
     for nid in crossings:
@@ -289,8 +322,7 @@ def get_crossing_points(crossings,nodes):
     return np.array(locations)
 
 ##########################################################
-def get_count_by_segment(csvinput, segments,artpoints,crossing_points):
-
+def get_count_by_segment(csvinput, segments, artpoints, crossing_points):
     t0 = time.time()
     artpointstree = scipy.spatial.cKDTree(artpoints[:,:2])
     crossing_pointstree = scipy.spatial.cKDTree(crossing_points[:,:2])
@@ -302,17 +334,10 @@ def get_count_by_segment(csvinput, segments,artpoints,crossing_points):
     fh.readline() # Header
 
     #imageid,n,x,y,t
-
     #denom = np.ones(nsegments)
-
-    inProj = Proj(init='epsg:3857')
-    outProj = Proj(init='epsg:4326')
 
     nerrors = 0
     maxcount = 0
-
-
-    #t0 = time.time()
 
     querycoords = []
     local_counts = []
@@ -321,9 +346,6 @@ def get_count_by_segment(csvinput, segments,artpoints,crossing_points):
     longs = []
 
     for i, line in enumerate(fh):
-        #t1=time.time()
-        #if i % 1000000:
-        #    print(i,(t1-t0)/i)
         arr = line.split(',')
         count = int(arr[1])
         if not arr[2]:
@@ -336,7 +358,6 @@ def get_count_by_segment(csvinput, segments,artpoints,crossing_points):
     longs = np.array(longs)
     lats = np.array(lats)
 
-    longs, lats = transform(inProj,outProj,longs,lats)
     if count > maxcount:
         maxcount = count
 
@@ -369,7 +390,6 @@ def get_count_by_segment(csvinput, segments,artpoints,crossing_points):
         if intersection_denom[i] > 0:
             intersection_counts[i] /= intersection_denom[i]
 
-    # debug(np.max(counts))
     debug('Max count:{}'.format(maxcount))
     warning('nerrors:{}'.format(nerrors))
     fh.close()
@@ -397,25 +417,16 @@ def extradata_to_patches(nodes, extradataarray,rot,**kwargs):
     return all_patches
 
 ##########################################################
-def render_map(d, render_all, outdir, logplot=False, xlim=None, ylim=None):
+def render_map(d, render_all, outdir, logplot=False, winsize=(4.5, 16), angle=0, xlim=None, ylim=None):
     t0 = time.time()
     debug('Start rendering')
 
-    fig, ax = plt.subplots(1,1, figsize=(4.5, 16))
-
-    # Render nodes
-    #nodes = get_nodes_coords_from_hash(nodes)
-    #plt.scatter(nodes[:, 1], nodes[:, 0], c='blue', alpha=1, s=20)
-
-    # Render artificial nodes
-    #plt.scatter(artpoints[:, 1], artpoints[:, 0], c='blue', alpha=1, s=20)
+    fig, ax = plt.subplots(1,1, figsize=winsize)
 
     # Render segments
-    segcolor = 'darkblue'
     i = 0
     maxvalue = np.log(25)
 
-    angle = 0.62
     rot = np.array( [[np.cos(angle),np.sin(angle)],[-np.sin(angle),np.cos(angle)]])
 
     lines = []
@@ -427,14 +438,6 @@ def render_map(d, render_all, outdir, logplot=False, xlim=None, ylim=None):
 
     for wid, wnodes in d['segments'].items():
         i += 1
-        #r = lambda: random.randint(0,255)
-        #if avgcounts == np.array([]):
-        #    segcolor = '#%02X%02X%02X' % (r(),r(),r())
-        #else:
-        #    if avgcounts[wid] == 0: alpha = 0
-        #    elif avgcounts[wid] > maxvalue: alpha = 1
-        #    else: alpha = np.log(avgcounts[wid]) / maxvalue
-
 
         lats = []; lons = []
         for nodeid in wnodes:
@@ -442,7 +445,7 @@ def render_map(d, render_all, outdir, logplot=False, xlim=None, ylim=None):
             lats.append(a)
             lons.append(o)
 
-        rotated_vals = np.dot(np.column_stack([lons,lats]),rot)
+        rotated_vals = np.dot(np.column_stack([lons,lats]), rot)
 
         lines.append(rotated_vals)
         values.append(d['segcounts'][wid])
@@ -475,7 +478,6 @@ def render_map(d, render_all, outdir, logplot=False, xlim=None, ylim=None):
                             np.logical_and(
                                 np.logical_and(min_ay <= max_lats,max_ay >= min_lats),
                                 np.logical_and(min_ax <= max_lons,max_ax >= min_lons)))
-    #values_to_mesure = values>0
 
     ## Render crossings
     #crossingscoords = np.ndarray((len(crossings), 2))
@@ -485,8 +487,6 @@ def render_map(d, render_all, outdir, logplot=False, xlim=None, ylim=None):
 
     low_percentile = np.percentile(values[values_to_measure], 1.0)
     high_percentile = np.percentile(values[values_to_measure], 99.0)
-    print('low_percentile, high_percentile')
-    print(low_percentile, high_percentile)
 
     if logplot:
         cnorm = colors.LogNorm(low_percentile,high_percentile)
@@ -512,65 +512,25 @@ def render_map(d, render_all, outdir, logplot=False, xlim=None, ylim=None):
     plt.scatter(crossing_points_rot[:,1],crossing_points_rot[:,0],s=16,
                 c=d['intersection_counts'],cmap=cmap,norm=cnorm)
 
-
-
-
     if render_all:
         all_patches = []
-        if 'building' in d['extradata']:
-            all_patches += extradata_to_patches(d['nodes'], d['extradata']['building'],rot,color='gray',zorder=0)
-        if 'park' in d['extradata']:
-            all_patches += extradata_to_patches(d['nodes'], d['extradata']['park'],rot,color='lightgreen',zorder=1)
-        if 'water' in d['extradata']:
-            all_patches += extradata_to_patches(d['nodes'], d['extradata']['water'],rot,color='skyblue',zorder=2)
+        for k, v in ROI.items():
+            if k == 'road': continue # it is rendered in another part
+            all_patches += extradata_to_patches(d['nodes'], d['regions'][k],
+                                                rot, color=v['c'], zorder=v['z'])
 
         if len(all_patches) > 0 :
             p = PatchCollection(all_patches,match_original=True)
             ax.add_collection(p)
 
-    #ax.axis('equal')
     ax.axis('off')
     plt.tight_layout()
-    #plt.sci(line_segments)
 
     ax.set_xlim(min_ax, max_ax)
     ax.set_ylim(min_ay, max_ay)
 
-    plt.savefig(os.path.join(outdir, 'test_new_map.pdf'))
+    plt.savefig(os.path.join(outdir, 'map.pdf'))
     debug('Finished exporting to image ({:.3f}s)'.format(time.time() - t0))
-
-##########################################################
-def compute_or_load(inputosm, countcsv, outdir):
-    d = {}
-
-    if os.path.exists(outdir):
-        debug('Output path {} exists. Loading files...'.format(outdir))
-        for var in VARS:
-            with open(os.path.join(outdir, var + '.pkl'), 'rb') as fh:
-                d[var] = pickle.load(fh)
-        debug('Successfully load files from {}'.format(outdir))
-    else:
-        os.mkdir(outdir)
-        tree = ET.parse(inputosm)
-        root = tree.getroot() # Tag osm
-        ways, invways, d['extradata'] = parse_ways(root)
-        input('foo')
-        d['nodes'] = parse_nodes(root)
-        ways, invways = filter_out_orphan_nodes(ways, invways, d['nodes'])
-        d['crossings'] = get_crossings(invways)
-        d['segments'], invsegments = get_segments(ways, d['crossings'])
-        d['artpoints'] = evenly_space_segments(d['segments'], d['nodes'])
-        d['crossing_points'] = get_crossing_points(d['crossings'], d['nodes'])
-        d['segcounts'], d['intersection_counts'] = get_count_by_segment(countcsv,
-                                                                        d['segments'],
-                                                                        d['artpoints'],
-                                                                        d['crossing_points'])
-
-        for v in VARS:
-            fh = open(os.path.join(outdir, v + '.pkl'), 'wb')
-            pickle.dump(d[v], fh)
-            fh.close()
-    return d
 
 ##########################################################
 if __name__ == '__main__':
@@ -586,7 +546,9 @@ if __name__ == '__main__':
     xlim = None # (-83.920689662521823, -83.914650455250239)
     ylim = None # (-9.7181982288883919, -9.7147186948317152)
     renderall = True
+    logscale = True
+    winsize = (9, 32)
+    rotangle = 0.62
 
     v = compute_or_load(args.inputosm, args.countcsv, args.outdir)
-    render_map(v, renderall, args.outdir, True, xlim, ylim)
-    # render_matplotlib(v, renderall, args.outdir, True, xlim, ylim)
+    render_map(v, renderall, args.outdir, logscale, winsize, rotangle, xlim, ylim)
