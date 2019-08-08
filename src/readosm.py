@@ -5,6 +5,9 @@ import matplotlib
 #matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
+from matplotlib.collections import LineCollection
+from matplotlib.collections import PatchCollection
+from matplotlib.patches import Polygon
 plt.style.use('ggplot')
 
 import os
@@ -21,7 +24,6 @@ import random
 import time
 import pickle
 
-import concurrent.futures
 import scipy.spatial
 from pyproj import Proj, transform
 
@@ -33,7 +35,7 @@ WAY_TYPES = ['motorway', 'trunk', 'primary', 'secondary', 'tertiary',
 MAX_ARRAY_SZ = 1048576  # 2^20
 
 intersection_delta = 1e-4
-VARS = ['nodeshash', 'segments', 'crossings', 'artpoints', 'crossing_points',
+VARS = ['nodes', 'segments', 'crossings', 'artpoints', 'crossing_points',
         'extradata', 'segcounts', 'intersection_counts']
 
 ##########################################################
@@ -42,14 +44,12 @@ def parse_nodes(root):#, invways):
 
     Args:
     root(ET): root element
-    invways(dict): inverted list of ways, i.e., node as key and list of way ids as values
 
     Returns:
-
+    dict: id as keys and (int, int) as values
     """
     t0 = time.time()
-    #valid = invways.keys()
-    nodeshash = {}
+    nodes = {}
 
     for child in root:
         if child.tag != 'node': continue # not node
@@ -57,10 +57,10 @@ def parse_nodes(root):#, invways):
         att = child.attrib
 
         lat, lon = float(att['lat']), float(att['lon'])
-        nodeshash[int(att['id'])] = (lat, lon)
-    debug('Found {} (traversable) nodes ({:.3f}s)'.format(len(nodeshash.keys()),
+        nodes[int(att['id'])] = (lat, lon)
+    debug('Found {} (traversable) nodes ({:.3f}s)'.format(len(nodes.keys()),
                                                           time.time() - t0))
-    return nodeshash
+    return nodes
 
 ##########################################################
 def parse_ways(root):
@@ -83,7 +83,7 @@ def parse_ways(root):
         if way.tag != 'way': continue
         wayid = int(way.attrib['id'])
         isstreet = False
-        extradatatype = None
+        regiontype = None
         nodes = []
 
         nodes = []
@@ -94,50 +94,26 @@ def parse_ways(root):
                 if child.attrib['k'] == 'highway' and child.attrib['v'] in WAY_TYPES:
                     isstreet = True
                 elif child.attrib['k'] == 'building' and child.attrib['v'] =='yes':
-                    extradatatype  = 'building'
+                    regiontype  = 'building'
                 elif child.attrib['k'] == 'leisure' and child.attrib['v'] =='park':
-                    extradatatype  = 'park'
+                    regiontype  = 'park'
                 elif child.attrib['k'] == 'natural' and child.attrib['v'] =='water':
-                    extradatatype  = 'water'
+                    regiontype  = 'water'
                 elif child.attrib['k'] == 'landuse' and child.attrib['v'] =='reservoir':
-                    extradatatype  = 'water'
+                    regiontype  = 'water'
         if isstreet:
             ways[wayid] = nodes
 
             for node in nodes:
                 if node in invways.keys(): invways[node].append(wayid)
                 else: invways[node] = [wayid]
-        elif extradatatype is not None:
-            extradata[extradatatype][wayid] = nodes
+        elif regiontype is not None:
+            print(regiontype)
+            extradata[regiontype][wayid] = nodes
+            print(nodes)
 
     debug('Found {} ways ({:.3f}s)'.format(len(ways.keys()), time.time() - t0))
     return ways, invways, extradata
-
-##########################################################
-def render_map(d, renderall, renderlib, outdir, logscale, xlim, ylim):
-    if renderlib == 'bokeh':
-        # render_bokeh(d, renderall, outdir, logscale, xlim, ylim)
-       debug('Currently broken. Use matplotlib instead.')
-    elif renderlib == 'matplotlib':
-        render_matplotlib(d, renderall, outdir, logscale, xlim, ylim)
-
-##########################################################
-def get_nodes_coords_from_hash(nodeshash):
-    """Get nodes coordinates and discard nodes ids information
-    Args:
-    nodeshash(dict): nodeid as key and (x, y) as value
-
-    Returns:
-    np.array(n, 2): Return a two-column table containing all the coordinates
-    """
-
-    nnodes = len(nodeshash.keys())
-    nodes = np.ndarray((nnodes, 2))
-
-    for j, coords in enumerate(nodeshash.values()):
-        nodes[j, 0] = coords[0]
-        nodes[j, 1] = coords[1]
-    return nodes
 
 ##########################################################
 def get_crossings(invways):
@@ -158,15 +134,15 @@ def get_crossings(invways):
     return crossings
 
 ##########################################################
-def filter_out_orphan_nodes(ways, invways, nodeshash):
-    """Check consistency of nodes in invways and nodeshash and fix them in case
+def filter_out_orphan_nodes(ways, invways, nodes):
+    """Check consistency of nodes in invways and nodes and fix them in case
     of inconsistency
     It can just be explained by the *non* exitance of nodes, even though they are
     referenced inside ways (<nd ref>)
 
     Args:
     invways(dict of list): nodeid as key and a list of wayids as values
-    nodeshash(dict of 2-uple): nodeid as key and (x, y) as value
+    nodes(dict of 2-uple): nodeid as key and (x, y) as value
     ways(dict of list): wayid as key and an ordered list of nodeids as values
 
     Returns:
@@ -174,10 +150,10 @@ def filter_out_orphan_nodes(ways, invways, nodeshash):
     """
 
     ninvways = len(invways.keys())
-    nnodeshash = len(nodeshash.keys())
-    if ninvways == nnodeshash: return ways, invways
+    nnodes = len(nodes.keys())
+    if ninvways == nnodes: return ways, invways
 
-    validnodes = set(nodeshash.keys())
+    validnodes = set(nodes.keys())
 
     # Filter ways
     for wayid, nodes in ways.items():
@@ -192,7 +168,7 @@ def filter_out_orphan_nodes(ways, invways, nodeshash):
         del invways[nodeid]
 
     ninvways = len(invways.keys())
-    debug('Filtered {} orphan nodes.'.format(ninvways - nnodeshash))
+    debug('Filtered {} orphan nodes.'.format(ninvways - nnodes))
     return ways, invways
 
 ##########################################################
@@ -242,22 +218,22 @@ def get_segments(ways, crossings):
     return segments, invsegments
 
 ##########################################################
-def evenly_space_segment(segment, nodeshash, epsilon):
+def evenly_space_segment(segment, nodes, epsilon):
     """Evenly space one segment
 
     Args:
     segment(list): nodeids composing the segment
-    nodeshash(dict of list): hash with nodeid as value and 2-uple as value
+    nodes(dict of list): hash with nodeid as value and 2-uple as value
 
     Returns:
     coords(ndarray(., 2)): array of coordinates
     """
     #debug(segment)
-    prevnode = np.array(nodeshash[segment[0]])
+    prevnode = np.array(nodes[segment[0]])
     points = [prevnode]
 
     for nodeid in segment[1:]:
-        node = np.array(nodeshash[nodeid])
+        node = np.array(nodes[nodeid])
         d = norm(node - prevnode)
         if d < epsilon:
             points.append(node)
@@ -279,12 +255,12 @@ def evenly_space_segment(segment, nodeshash, epsilon):
 
 
 ##########################################################
-def evenly_space_segments(segments, nodeshash, epsilon=0.0001):
+def evenly_space_segments(segments, nodes, epsilon=0.0001):
     """Evenly space all segments and create artificial points
 
     Args:
     segments(dict of list): hash of segmentid as key and list of nodes as values
-    nodeshash(dict of list): hash with nodeid as value and 2-uple as value
+    nodes(dict of list): hash with nodeid as value and 2-uple as value
 
     Returns:
     points(ndarray(., 3)): rows represents points and first and second columns
@@ -295,7 +271,7 @@ def evenly_space_segments(segments, nodeshash, epsilon=0.0001):
     points = np.ndarray((MAX_ARRAY_SZ, 3))
     idx = 0
     for sid, segment in segments.items():
-        coords = evenly_space_segment(segment, nodeshash, epsilon)
+        coords = evenly_space_segment(segment, nodes, epsilon)
         n, _ = coords.shape
         points[idx:idx+n, 0:2] = coords
         points[idx:idx+n, 2] = sid
@@ -304,11 +280,11 @@ def evenly_space_segments(segments, nodeshash, epsilon=0.0001):
     return points[:idx, :]
 
 ###########################################################
-def get_crossing_points(crossings,nodeshash):
+def get_crossing_points(crossings,nodes):
     locations = []
 
     for nid in crossings:
-        locations.append(np.array(nodeshash[nid]))
+        locations.append(np.array(nodes[nid]))
 
     return np.array(locations)
 
@@ -401,19 +377,18 @@ def get_count_by_segment(csvinput, segments,artpoints,crossing_points):
     return counts, intersection_counts
 
 ##########################################################
-def extradata_to_patches(nodeshash, extradataarray,rot,**kwargs):
-    from matplotlib.patches import Polygon
+def extradata_to_patches(nodes, extradataarray,rot,**kwargs):
     all_patches = []
 
     for bid,building in extradataarray.items():
         is_good=True
         locations = np.zeros((len(building),2),dtype=np.float)
         for idx,nid in enumerate(building):
-            loc = nodeshash.get(nid,None)
+            loc = nodes.get(nid,None)
             if loc is None:
                 is_good = False
                 break
-            locations[idx,:] = nodeshash[nid][::-1]
+            locations[idx,:] = nodes[nid][::-1]
 
         if is_good:
             locations = np.dot(locations,rot)
@@ -422,15 +397,14 @@ def extradata_to_patches(nodeshash, extradataarray,rot,**kwargs):
     return all_patches
 
 ##########################################################
-def render_matplotlib(d, render_all, outdir, logplot=False, xlim=None, ylim=None):
+def render_map(d, render_all, outdir, logplot=False, xlim=None, ylim=None):
     t0 = time.time()
-    debug('Rendering map to image')
+    debug('Start rendering')
 
     fig, ax = plt.subplots(1,1, figsize=(4.5, 16))
 
-
     # Render nodes
-    #nodes = get_nodes_coords_from_hash(nodeshash)
+    #nodes = get_nodes_coords_from_hash(nodes)
     #plt.scatter(nodes[:, 1], nodes[:, 0], c='blue', alpha=1, s=20)
 
     # Render artificial nodes
@@ -464,7 +438,7 @@ def render_matplotlib(d, render_all, outdir, logplot=False, xlim=None, ylim=None
 
         lats = []; lons = []
         for nodeid in wnodes:
-            a, o = d['nodeshash'][nodeid]
+            a, o = d['nodes'][nodeid]
             lats.append(a)
             lons.append(o)
 
@@ -506,7 +480,7 @@ def render_matplotlib(d, render_all, outdir, logplot=False, xlim=None, ylim=None
     ## Render crossings
     #crossingscoords = np.ndarray((len(crossings), 2))
     #for j, crossing in enumerate(crossings):
-    #    crossingscoords[j, :] = np.array(nodeshash[crossing])
+    #    crossingscoords[j, :] = np.array(nodes[crossing])
     ##plt.scatter(crossingscoords[:, 1], crossingscoords[:, 0], c='black')
 
     low_percentile = np.percentile(values[values_to_measure], 1.0)
@@ -524,7 +498,6 @@ def render_matplotlib(d, render_all, outdir, logplot=False, xlim=None, ylim=None
     cmap.set_bad(cmap(0))
     cmap.set_over(cmap(1))
 
-    from matplotlib.collections import LineCollection
     line_segments = LineCollection(lines,
                                    #linewidths=(0.5, 1, 1.5, 2),
                                    linestyles='solid',
@@ -540,17 +513,16 @@ def render_matplotlib(d, render_all, outdir, logplot=False, xlim=None, ylim=None
                 c=d['intersection_counts'],cmap=cmap,norm=cnorm)
 
 
-    from matplotlib.collections import PatchCollection
 
 
     if render_all:
         all_patches = []
         if 'building' in d['extradata']:
-            all_patches += extradata_to_patches(d['nodeshash'], d['extradata']['building'],rot,color='gray',zorder=0)
+            all_patches += extradata_to_patches(d['nodes'], d['extradata']['building'],rot,color='gray',zorder=0)
         if 'park' in d['extradata']:
-            all_patches += extradata_to_patches(d['nodeshash'], d['extradata']['park'],rot,color='lightgreen',zorder=1)
+            all_patches += extradata_to_patches(d['nodes'], d['extradata']['park'],rot,color='lightgreen',zorder=1)
         if 'water' in d['extradata']:
-            all_patches += extradata_to_patches(d['nodeshash'], d['extradata']['water'],rot,color='skyblue',zorder=2)
+            all_patches += extradata_to_patches(d['nodes'], d['extradata']['water'],rot,color='skyblue',zorder=2)
 
         if len(all_patches) > 0 :
             p = PatchCollection(all_patches,match_original=True)
@@ -568,43 +540,6 @@ def render_matplotlib(d, render_all, outdir, logplot=False, xlim=None, ylim=None
     debug('Finished exporting to image ({:.3f}s)'.format(time.time() - t0))
 
 ##########################################################
-def render_bokeh(d, renderall, outdir, logscale, xlim, ylim):
-    t0 = time.time()
-    debug('Rendering map to screen')
-    nodes = get_nodes_coords_from_hash(d['nodeshash'])
-
-    from bokeh.plotting import figure, show, output_file
-    TOOLS="hover,pan,wheel_zoom,reset"
-    p = figure(tools=TOOLS)
-
-    # render nodes
-    p.scatter(nodes[:, 1], nodes[:, 0], size=10, fill_alpha=0.8,
-                        line_color=None)
-
-    # render ways
-    for wnodes in d['ways'].values():
-        r = lambda: random.randint(0, 255)
-        waycolor = '#%02X%02X%02X' % (r(),r(),r())
-        lats = []; lons = []
-        for nodeid in wnodes:
-            a, o = d['nodeshash'][nodeid]
-            lats.append(a)
-            lons.append(o)
-        p.line(lons, lats, line_width=2, line_color=waycolor)
-
-    # render crossings
-    crossingscoords = np.ndarray((len(d['crossings']), 2))
-    for j, crossing in enumerate(d['crossings']):
-        crossingscoords[j, :] = np.array(d['nodeshash'][crossing])
-    p.scatter(crossingscoords[:, 1], crossingscoords[:, 0], line_color='black')
-
-    output_file("osm-test.html", title="OSM test")
-
-    debug('Not rendering count yet')
-    debug('Finished rendering ({:.3f}s)'.format(time.time() - t0))
-    show(p)  # open a browser
-
-##########################################################
 def compute_or_load(inputosm, countcsv, outdir):
     d = {}
 
@@ -619,12 +554,13 @@ def compute_or_load(inputosm, countcsv, outdir):
         tree = ET.parse(inputosm)
         root = tree.getroot() # Tag osm
         ways, invways, d['extradata'] = parse_ways(root)
-        d['nodeshash'] = parse_nodes(root)
-        ways, invways = filter_out_orphan_nodes(ways, invways, d['nodeshash'])
+        input('foo')
+        d['nodes'] = parse_nodes(root)
+        ways, invways = filter_out_orphan_nodes(ways, invways, d['nodes'])
         d['crossings'] = get_crossings(invways)
         d['segments'], invsegments = get_segments(ways, d['crossings'])
-        d['artpoints'] = evenly_space_segments(d['segments'], d['nodeshash'])
-        d['crossing_points'] = get_crossing_points(d['crossings'], d['nodeshash'])
+        d['artpoints'] = evenly_space_segments(d['segments'], d['nodes'])
+        d['crossing_points'] = get_crossing_points(d['crossings'], d['nodes'])
         d['segcounts'], d['intersection_counts'] = get_count_by_segment(countcsv,
                                                                         d['segments'],
                                                                         d['artpoints'],
@@ -650,8 +586,7 @@ if __name__ == '__main__':
     xlim = None # (-83.920689662521823, -83.914650455250239)
     ylim = None # (-9.7181982288883919, -9.7147186948317152)
     renderall = True
-    renderlib = 'bokeh'
 
     v = compute_or_load(args.inputosm, args.countcsv, args.outdir)
-    render_map(v, renderall, renderlib, args.outdir, True, xlim, ylim)
+    render_map(v, renderall, args.outdir, True, xlim, ylim)
     # render_matplotlib(v, renderall, args.outdir, True, xlim, ylim)
