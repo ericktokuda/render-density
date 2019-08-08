@@ -55,7 +55,7 @@ def parse_nodes(root, invways, csvinput=None):
     poly = Point()
 
     if csvinput:
-        hullpoints = np.ndarray((2000000, 2))
+        hullpoints = np.ndarray((11000000, 2))
         fh = open(csvinput)
         fh.readline() # Header
         acc = 0
@@ -481,21 +481,15 @@ def render_matplotlib(nodeshash, segments, crossings, artpoints,crossing_points,
                       avgcounts,intersection_counts, outdir,
                       logplot=False,xlim=None,ylim=None):
     t0 = time.time() 
-    fig, ax = plt.subplots(1,1, figsize=(16, 14))
-
-    # Render nodes
-    #nodes = get_nodes_coords_from_hash(nodeshash)
-    #plt.scatter(nodes[:, 1], nodes[:, 0], c='blue', alpha=1, s=20)
-
-    # Render artificial nodes
-    #plt.scatter(artpoints[:, 1], artpoints[:, 0], c='blue', alpha=1, s=20)
+    fig, ax = plt.subplots(1,1, figsize=(8, 7))
 
     # Render segments
     segcolor = 'darkblue'
     i = 0
     maxvalue = np.log(25)
     
-    angle = 0.62
+    #angle = 0.62
+    angle = 0
     rot = np.array( [[np.cos(angle),np.sin(angle)],[-np.sin(angle),np.cos(angle)]])
 
     lines = []
@@ -507,14 +501,6 @@ def render_matplotlib(nodeshash, segments, crossings, artpoints,crossing_points,
 
     for wid, wnodes in segments.items():
         i += 1
-        #r = lambda: random.randint(0,255)
-        #if avgcounts == np.array([]):
-        #    segcolor = '#%02X%02X%02X' % (r(),r(),r())
-        #else:
-        #    if avgcounts[wid] == 0: alpha = 0
-        #    elif avgcounts[wid] > maxvalue: alpha = 1
-        #    else: alpha = np.log(avgcounts[wid]) / maxvalue
-
         
         lats = []; lons = []
         for nodeid in wnodes:
@@ -551,18 +537,8 @@ def render_matplotlib(nodeshash, segments, crossings, artpoints,crossing_points,
         min_ay = ylim[0]
         max_ay = ylim[1]
         
-    #values_to_mesure = np.logical_and(values>0 ,
-    #                        np.logical_and(
-    #                            np.logical_and(min_ay <= max_lats,max_ay >= min_lats),
-    #                            np.logical_and(min_ax <= max_lons,max_ax >= min_lons)))
     values_to_mesure = values>0 
     
-    ## Render crossings
-    #crossingscoords = np.ndarray((len(crossings), 2))
-    #for j, crossing in enumerate(crossings):
-    #    crossingscoords[j, :] = np.array(nodeshash[crossing])
-    ##plt.scatter(crossingscoords[:, 1], crossingscoords[:, 0], c='black')
-
     low_percentile = np.percentile(values[values_to_mesure],1.0)
     high_percentile = np.percentile(values[values_to_mesure],99.0)
     print(low_percentile,high_percentile)
@@ -571,7 +547,7 @@ def render_matplotlib(nodeshash, segments, crossings, artpoints,crossing_points,
     else:
         cnorm = colors.Normalize(low_percentile,high_percentile)
         
-    cmap = plt.get_cmap()
+    cmap = plt.get_cmap('viridis')
     cmap.set_under(cmap(0))
     cmap.set_bad(cmap(0))
     cmap.set_over(cmap(1))
@@ -579,30 +555,19 @@ def render_matplotlib(nodeshash, segments, crossings, artpoints,crossing_points,
     from matplotlib.collections import LineCollection
     line_segments = LineCollection(lines,
                                    #linewidths=(0.5, 1, 1.5, 2),
+                                   linewidths=1,
                                    linestyles='solid',
                                    norm=cnorm,
                                    cmap = cmap )
     line_segments.set_array(values)
     ax.add_collection(line_segments)
     axcb = fig.colorbar(line_segments,aspect=50,orientation='vertical')
-    axcb.set_label('Relative Pedestrian Density',size=15)
+    axcb.set_label('Relative Pedestrian Density',size=12)
+    axcb.ax.tick_params(labelsize=10)
 
     crossing_points_rot = np.dot(crossing_points,rot.T)
-    plt.scatter(crossing_points_rot[:,1],crossing_points_rot[:,0],s=16,
-                c=intersection_counts,cmap=cmap,norm=cnorm)
-    
-    
-    from matplotlib.collections import PatchCollection
-    from matplotlib.patches import Circle
-    
-    
-    #patches = [Circle((crossing_points_rot[i,1],crossing_points_rot[i,0]),intersection_delta,
-    #                  alpha=1,edgecolor='black',facecolor='none',fill=False,linewidth=4) 
-    #                    for i in range(crossing_points_rot.shape[0])]
-    
-
-    #p = PatchCollection(patches,match_original=True)
-    #ax.add_collection(p)
+    #plt.scatter(crossing_points_rot[:,1],crossing_points_rot[:,0],s=10,
+                #c=intersection_counts,cmap=cmap,norm=cnorm)
     
     #ax.axis('equal')
     ax.axis('off')
