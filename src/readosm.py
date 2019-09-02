@@ -5,6 +5,7 @@ import matplotlib
 #matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
+from matplotlib.colors import LogNorm
 from matplotlib.collections import LineCollection
 from matplotlib.collections import PatchCollection
 from matplotlib.patches import Polygon
@@ -31,6 +32,7 @@ from logging import debug, warning
 import random
 import time
 import pickle
+import pandas as pd
 
 import scipy.spatial
 from pyproj import Proj, transform
@@ -48,13 +50,54 @@ WAY_TYPES = ['motorway', 'trunk', 'primary', 'secondary', 'tertiary',
              'unclassified', 'residential', 'service', 'living_street']
 ROI = {
     'road': {'k': 'highway', 'v': WAY_TYPES, 'c': 'lightgray', 'z': 0},
+    'building': {'k': 'building', 'v': ['yes'], 'c': 'gray', 'z': 0},
+    'water': {'k': 'landuse', 'v': ['reservoir'], 'c': 'skyblue', 'z': 2},
+    'park': {'k': 'leisure', 'v': ['park'], 'c': 'lightgreen', 'z': 1},
        }
-    # 'building': {'k': 'building', 'v': ['yes'], 'c': 'gray', 'z': 0},
-    # 'water': {'k': 'landuse', 'v': ['reservoir'], 'c': 'skyblue', 'z': 2},
-    # 'park': {'k': 'leisure', 'v': ['park'], 'c': 'lightgreen', 'z': 1},
     # 'hospital': {'k': 'amenity', 'v': ['hospital'], 'c': 'red', 'z': 2},
 ##########################################################
 
+def plot_count_pictures(outdir):
+    import mpl_scatter_density
+
+    from astropy.visualization import LogStretch
+    from astropy.visualization.mpl_normalize import ImageNormalize
+    norm = ImageNormalize(vmin=0., vmax=17500, stretch=LogStretch())
+
+    df = pd.read_csv('/mnt/3tb-home/frodo/projects/osm-parser/data/20180901_peds_manhattan_workdays_crs4326.csv')
+    x = df['lon']
+    y = df['lat']
+    dpi = 150 # 72, 96,150
+
+    fig = plt.figure(figsize=(10,10))
+    ax = fig.add_subplot(1, 1, 1, projection='scatter_density')
+    density = ax.scatter_density(x, y, norm=norm, cmap='Greys')
+    # ax.set_xlim(-5, 10)
+    # ax.set_ylim(-5, 10)
+    ax.axis('off')
+    ax.set_facecolor('white')
+    plt.tick_params(axis='both', which='both', bottom=False,
+            top=False, left=False, labelbottom=False) 
+
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
+    axcb = fig.colorbar(density, label='Number of pictures', ticks=[0,4000,8000,16000],
+                        aspect=70,
+                        cax = fig.add_axes([.9, .2, 0.01, 0.3])
+                        )
+
+    cbarfontsize = 16
+    text = axcb.ax.yaxis.label
+    font = matplotlib.font_manager.FontProperties(size=cbarfontsize)
+    text.set_font_properties(font)
+    axcb.ax.tick_params(labelsize=cbarfontsize)
+    axcb.formatter.set_scientific(True)
+    axcb.formatter.set_powerlimits((0,4))
+    axcb.formatter._useMathText = True
+    axcb.ax.yaxis.get_offset_text().set_fontsize(cbarfontsize)
+    axcb.update_ticks()
+    fig.savefig(os.path.join(outdir, 'countpictures.pdf'))
+
+##########################################################
 # mapbox_back = '#1a1a1a'
 # matplotlib_plot_area = '#363633'
 # mapbox_plot_area = '#3a3a3a'
@@ -387,6 +430,7 @@ def get_count_by_segment(csvinput, segments, artpoints, crossing_points):
     for i, line in enumerate(fh):
         arr = line.split(',')
         count = int(arr[1])
+        # count = 1
         if not arr[2]:
             nerrors += 1
             continue
@@ -548,13 +592,17 @@ def render_map(d, render_all, outdir, logplot=False, winsize=(4.5, 16), angle=0,
     cmap_name = 'mapbox_grays'
     cmap = LinearSegmentedColormap.from_list(
                     cmap_name, mycolors, N=n_bin)
-    cmap = 'Blues'
+    # cmap = 'Greys'
+    # cmap = 'Blues'
+    cmap = 'PuBu'
+    # cmap = 'OrRd'
 
     line_segments = LineCollection(lines,
                                    linewidths=(3),
                                    linestyles='solid',
                                    norm=cnorm,
                                    cmap=cmap,
+                                   # colors=['blue'],
                                    capstyle='round')
     line_segments.set_array(values)
     ax.add_collection(line_segments)
@@ -565,25 +613,33 @@ def render_map(d, render_all, outdir, logplot=False, winsize=(4.5, 16), angle=0,
     # plt.scatter(crossing_points_rot[:,1],crossing_points_rot[:,0],s=16,
                 # c=d['intersection_counts'],cmap=cmap,norm=cnorm)
 
-    # if render_all:
-        # all_patches = []
-        # for k, v in ROI.items():
-            # if k == 'road': continue # it is rendered in another part
-            # all_patches += extradata_to_patches(d['nodes'], d['regions'][k],
-                                                # rot, color=v['c'], zorder=v['z'])
+    if render_all:
+        all_patches = []
+        for k, v in ROI.items():
+            if k == 'road': continue # it is rendered in another part
+            all_patches += extradata_to_patches(d['nodes'], d['regions'][k],
+                                                rot, color=v['c'], zorder=v['z'])
 
-        # if len(all_patches) > 0 :
-            # p = PatchCollection(all_patches,match_original=True)
-            # ax.add_collection(p)
+        if len(all_patches) > 0 :
+            p = PatchCollection(all_patches,match_original=True)
+            ax.add_collection(p)
 
     plt.tight_layout()
 
     ax.set_xlim(min_ax, max_ax)
     ax.set_ylim(min_ay, max_ay)
 
-    source_shapefile = "/tmp/manhattanmap/manhattan.shp"
+    # source_shapefile = "/tmp/manhattanmap/wv.shp"
+    source_shapefile = "data/vectormaps/manhattan.shp"
+    # source_shapefile = "data/vectormaps/wv.shp"
     with fiona.open(source_shapefile) as source:
         plot_map(ax, source)
+
+    axcb = fig.colorbar(line_segments,aspect=50,orientation='vertical')
+    # ticks = np.linspace(0, 2, 50)
+    # axcb.set_ticks(ticks)
+    axcb.ax.tick_params(labelsize=40)
+    axcb.set_label('Relative Pedestrian Density (log)',size=40)
 
     # ax.axis('off')
     plt.tick_params(
@@ -612,12 +668,56 @@ if __name__ == '__main__':
     ylim = None # (-9.7181982288883919, -9.7147186948317152)
     # xlim = (-4756.8911953312218, -4754.7348445911539)
     # ylim = (592, 594.95)
-    renderall = True
+    renderall = False
     # logscale = False
     logscale = True
-    winsize = (16, 16)
+    winsize = (32,32)
+    # winsize = (16,16)
     # rotangle = 0.62
     rotangle = 0
     # rotangle = np.deg2rad(28.912)
+
+
+    ########################################################## plot count
+    df = pd.read_csv(args.countcsv)
+    x = df.lon
+    y = df.lat
+
+    fig, ax = plt.subplots(1,1, figsize=(32,32))
+
+    # heatmap, xedges, yedges = np.histogram2d(x, y, bins=200)
+    # extent = [xedges[0], xedges[-1], yedges[0], yedges[-1]]
+    # ax.imshow(heatmap.T, extent=extent, origin='lower', norm=LogNorm(),
+              # cmap='Greys')
+    # h = ax.hist2d(x, y, bins=200, cmap='Greys', norm=LogNorm())
+
+
+    ##########################################################
+    # h, xedges, yedges = np.histogram2d(x, y, bins=200)
+    # pc = ax.pcolormesh(xedges, yedges, h.T, cmap='Greys', norm=LogNorm(),
+                       # edgecolor=(0.5, 0.5, 0.5, 0.5), linewidth=0.0015625)
+    # ax.set_xlim(xedges[0], xedges[-1])
+    # ax.set_ylim(yedges[0], yedges[-1])
+
+    ##########################################################
+    # ax.tick_params(
+        # axis='both',
+        # which='both',
+        # bottom=False,
+        # top=False,
+        # left=False,
+        # right=False,
+        # labelbottom=False,
+        # labelleft=False) # labels along the bottom edge are off
+    # ax.axis('off')
+    # ax.grid(False)
+    # axcb = fig.colorbar(pc, ax=ax)
+    # axcb.set_label('Number of pictures',size=40)
+    # axcb.ax.tick_params(labelsize=40)
+    # # ax.set_axisbelow(True)
+    # plt.savefig(os.path.join(args.outdir, 'count.pdf'))
+    ##########################################################
+    # input('waiting for users input')
+    plot_count_pictures(args.outdir)
     v = compute_or_load(args.inputosm, args.countcsv, args.outdir)
     render_map(v, renderall, args.outdir, logscale, winsize, rotangle, xlim, ylim)
