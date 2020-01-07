@@ -17,6 +17,7 @@ from shapely import geometry
 from descartes.patch import PolygonPatch#, PathPatch
 from matplotlib import cm
 from matplotlib.colors import LinearSegmentedColormap
+import geojson
 ##########################################################
 
 import os
@@ -69,7 +70,7 @@ def plot_count_pictures(outdir):
     y = df['lat']
     dpi = 150 # 72, 96,150
 
-    fig = plt.figure(figsize=(10,10))
+    fig = plt.figure(figsize=(6,8))
     ax = fig.add_subplot(1, 1, 1, projection='scatter_density')
     density = ax.scatter_density(x, y, norm=norm, cmap='Greys')
     # ax.set_xlim(-5, 10)
@@ -82,10 +83,10 @@ def plot_count_pictures(outdir):
     from mpl_toolkits.axes_grid1 import make_axes_locatable
     axcb = fig.colorbar(density, label='Number of pictures', ticks=[0,4000,8000,16000],
                         aspect=70,
-                        cax = fig.add_axes([.9, .2, 0.01, 0.3])
+                        cax = fig.add_axes([.85, .2, 0.01, 0.3])
                         )
 
-    cbarfontsize = 16
+    cbarfontsize = 12
     text = axcb.ax.yaxis.label
     font = matplotlib.font_manager.FontProperties(size=cbarfontsize)
     text.set_font_properties(font)
@@ -653,6 +654,29 @@ def render_map(d, render_all, outdir, logplot=False, winsize=(4.5, 16), angle=0,
     plt.savefig(os.path.join(outdir, 'map.pdf'))
     debug('Finished exporting to image ({:.3f}s)'.format(time.time() - t0))
 
+def export_geojson(picklesdir):
+    """Export data to geojson
+
+    Args:
+    picklesdir(str): path to the pickles
+    """
+    nodes = pkl.load(open(pjoin(picklesdir, 'nodes.pkl'), 'rb'))
+    segments = pkl.load(open(pjoin(picklesdir, 'segments.pkl'), 'rb'))
+    segcounts = pkl.load(open(pjoin(picklesdir, 'segcounts.pkl'), 'rb'))
+
+    features = []
+    for segid, nodeids in segments.items():
+        nodecoords = []
+        for nodeid in nodeids:
+            nodecoords.append(nodes[nodeid])
+        linestring = geojson.LineString(nodecoords)
+        features.append(geojson.Feature(geometry=linestring, properties={'avgcount':segcounts[segid]}))
+
+    featurecollection = geojson.FeatureCollection(features)
+    fh = open('/tmp/out.geojson', 'w')
+    fh.write(geojson.dumps(featurecollection))
+    fh.close()
+
 ##########################################################
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
@@ -718,6 +742,6 @@ if __name__ == '__main__':
     # plt.savefig(os.path.join(args.outdir, 'count.pdf'))
     ##########################################################
     # input('waiting for users input')
-    plot_count_pictures(args.outdir)
+    # plot_count_pictures(args.outdir)
     v = compute_or_load(args.inputosm, args.countcsv, args.outdir)
     render_map(v, renderall, args.outdir, logscale, winsize, rotangle, xlim, ylim)
