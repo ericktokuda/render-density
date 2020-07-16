@@ -1,4 +1,4 @@
-"""Plot provided map (mapquest) colored by the counts"""
+"""Plot frames aggregated by time. Blurred scatter plot colored by the counts"""
 
 from bokeh.io import output_notebook, show
 from bokeh.plotting import Figure
