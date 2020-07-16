@@ -1,4 +1,4 @@
-"""Plot by simply blurring"""
+"""Plot provided map (mapquest) colored by the counts"""
 
 from bokeh.io import output_notebook, show
 from bokeh.plotting import Figure

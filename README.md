@@ -7,5 +7,5 @@ conda create --name carmeravis bokeh pandas pillow datashader matplotlib ipython
 
 Run it with
 ```
-python3 src/readosm.py  data/beaver0.osm
+python src/readosm.py  data/data.osm   data/data.csv /tmp/rendered/
 ```
