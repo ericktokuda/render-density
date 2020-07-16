@@ -13,7 +13,7 @@ from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.collections import LineCollection, PatchCollection
 from matplotlib import cm
 from matplotlib.patches import Polygon
-plt.style.use('seaborn')
+# plt.style.use('seaborn')
 
 import fiona
 from shapely import geometry
@@ -555,8 +555,8 @@ def render_map(d, shppath, render_all, outdir, logplot=False, winsize=(4.5, 16),
     else:
         min_ay = ylim[0]
         max_ay = ylim[1]
+    # min_ax = 
 
-    breakpoint()
     values_to_measure = np.logical_and(values>0 ,
                             np.logical_and(
                                 np.logical_and(min_ay <= max_lats,max_ay >= min_lats),
@@ -587,11 +587,6 @@ def render_map(d, shppath, render_all, outdir, logplot=False, winsize=(4.5, 16),
     mycolors = np.array([[58, 58, 58, 256],
                        [76,114,176, 256]])/256
 
-    n_bin = 30
-    cmap_name = 'mapbox_grays'
-    cmap = LinearSegmentedColormap.from_list(
-                    cmap_name, mycolors, N=n_bin)
-
     cmap = 'hot' # 'hot', 'OrRd', 'Blues', 'Greys'
 
     line_segments = LineCollection(lines,
@@ -605,7 +600,7 @@ def render_map(d, shppath, render_all, outdir, logplot=False, winsize=(4.5, 16),
     # axcb = fig.colorbar(line_segments,aspect=50,orientation='vertical')
     # axcb.set_label('Relative Pedestrian Density',size=15)
 
-    crossing_points_rot = d['crossing_points']
+    # crossing_points_rot = d['crossing_points']
     # plt.scatter(crossing_points_rot[:,1],crossing_points_rot[:,0],s=16,
                 # c=d['intersection_counts'],cmap=cmap,norm=cnorm)
 
@@ -620,28 +615,29 @@ def render_map(d, shppath, render_all, outdir, logplot=False, winsize=(4.5, 16),
             p = PatchCollection(all_patches,match_original=True)
             ax.add_collection(p)
 
-    plt.tight_layout()
+    min_ax =  -74.02; max_ax =  -73.98 # TODO:get from the nodes coords
+    min_ay =  40.72; max_ay =  40.750
 
     ax.set_xlim(min_ax, max_ax)
     ax.set_ylim(min_ay, max_ay)
 
-    with fiona.open(shppath) as source:
-        plot_map(ax, source)
+    # Plot underlying map
+    # with fiona.open(shppath) as source:
+        # plot_map(ax, source)
 
     axcb = fig.colorbar(line_segments,aspect=50,orientation='vertical')
     # ticks = np.linspace(0, 2, 50)
     # axcb.set_ticks(ticks)
     axcb.ax.tick_params(labelsize=40)
-    axcb.set_label('Relative Pedestrian Density (log)',size=40)
+    axcb.set_label('Relative Pedestrian Density',size=40)
 
-    # ax.axis('off')
-    plt.tick_params(
-            axis='both',          # changes apply to the x-axis
-            which='both',      # both major and minor ticks are affected
-            bottom=False,      # ticks along the bottom edge are off
-            top=False,         # ticks along the top edge are off
-            left=False,
-            labelbottom=False) # labels along the bottom edge are off
+    # plt.tick_params(
+            # axis='both',          # changes apply to the x-axis
+            # which='both',      # both major and minor ticks are affected
+            # bottom=False,      # ticks along the bottom edge are off
+            # top=False,         # ticks along the top edge are off
+            # left=False,
+            # labelbottom=False) # labels along the bottom edge are off
 
     plt.savefig(os.path.join(outdir, 'map.pdf'))
 
