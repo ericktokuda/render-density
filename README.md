@@ -1,11 +1,15 @@
 ## Studying OSM
 Install
 ```
-conda create --name carmeravis bokeh pandas pillow datashader matplotlib ipython pyproj rtree fiona descartes geojson
+conda create --name carmeravis bokeh pandas pillow datashader matplotlib ipython pyproj rtree fiona descartes geojson astropy
+pip install mpl-scatter-density
 ```
 
 
-Run it with
+The script `src/renderseq.py` generates a blurred scatter of the points, colored by the counts.
+
+The script `src/renderstreets.py` plots the counts colored by streets.
+
 ```
-python src/readosm.py  data/data.osm   data/data.csv /tmp/rendered/
+python src/renderstreets.py  data/data.osm   data/data.csv /tmp/rendered/
 ```

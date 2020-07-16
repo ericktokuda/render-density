@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
-"""Parse OSM data
+"""Render density given by the counts in the csv provided. Aggregate by streets.
 """
+
+import inspect
+from datetime import datetime
 import matplotlib
-#matplotlib.use('Agg')
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 from matplotlib.colors import LogNorm
-from matplotlib.collections import LineCollection
-from matplotlib.collections import PatchCollection
+from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.collections import LineCollection, PatchCollection
+from matplotlib import cm
 from matplotlib.patches import Polygon
 plt.style.use('seaborn')
 
-##########################################################
 import fiona
 from shapely import geometry
 from descartes.patch import PolygonPatch#, PathPatch
-from matplotlib import cm
-from matplotlib.colors import LinearSegmentedColormap
 import geojson
-##########################################################
 
+import sys
 import os
 import numpy as np
 import numpy
@@ -28,8 +29,6 @@ from numpy.linalg import norm as norm
 import argparse
 import xml.etree.ElementTree as ET
 from rtree import index
-import logging
-from logging import debug, warning
 import random
 import time
 import pickle
@@ -56,18 +55,21 @@ ROI = {
     'park': {'k': 'leisure', 'v': ['park'], 'c': 'lightgreen', 'z': 1},
        }
     # 'hospital': {'k': 'amenity', 'v': ['hospital'], 'c': 'red', 'z': 2},
+
+#############################################################
+def info(*args):
+    pref = datetime.now().strftime('[%y%m%d %H:%M:%S]')
+    print(pref, *args, file=sys.stdout)
+
 ##########################################################
-
-def plot_count_pictures(outdir):
+def render_points_continuous(countsdf):
     import mpl_scatter_density
-
     from astropy.visualization import LogStretch
     from astropy.visualization.mpl_normalize import ImageNormalize
     norm = ImageNormalize(vmin=0., vmax=17500, stretch=LogStretch())
 
-    df = pd.read_csv('/mnt/3tb-home/frodo/projects/osm-parser/data/20180901_peds_manhattan_workdays_crs4326.csv')
-    x = df['lon']
-    y = df['lat']
+    x = countsdf['lon']
+    y = countsdf['lat']
     dpi = 150 # 72, 96,150
 
     fig = plt.figure(figsize=(6,8))
@@ -77,7 +79,7 @@ def plot_count_pictures(outdir):
     # ax.set_ylim(-5, 10)
     ax.axis('off')
     ax.set_facecolor('white')
-    plt.tick_params(axis='both', which='both', bottom=False,
+    ax.tick_params(axis='both', which='both', bottom=False,
             top=False, left=False, labelbottom=False) 
 
     from mpl_toolkits.axes_grid1 import make_axes_locatable
@@ -96,7 +98,6 @@ def plot_count_pictures(outdir):
     axcb.formatter._useMathText = True
     axcb.ax.yaxis.get_offset_text().set_fontsize(cbarfontsize)
     axcb.update_ticks()
-    fig.savefig(os.path.join(outdir, 'countpictures.pdf'))
 
 ##########################################################
 # mapbox_back = '#1a1a1a'
@@ -131,15 +132,15 @@ def plot_map(ax, source):
 
 
 ##########################################################
-def compute_or_load(inputosm, countcsv, outdir):
+def aggregate_by_streets(inputosm, countcsv, outdir):
     d = {}
 
     if os.path.exists(outdir):
-        debug('Output path {} exists. Loading files...'.format(outdir))
+        info('Output path {} exists. Loading files...'.format(outdir))
         for var in VARS:
             with open(os.path.join(outdir, var + '.pkl'), 'rb') as fh:
                 d[var] = pickle.load(fh)
-        debug('Successfully load files from {}'.format(outdir))
+        info('Successfully loaded files from {}'.format(outdir))
     else:
         os.mkdir(outdir)
         tree = ET.parse(inputosm)
@@ -207,7 +208,7 @@ def parse_ways(root):
         else:
             regions[regiontype][wayid] = nodes  # Regions of interest
 
-    debug('Found {} ways ({:.3f}s)'.format(len(ways.keys()), time.time() - t0))
+    info('Found {} ways ({:.3f}s)'.format(len(ways.keys()), time.time() - t0))
     return ways, invways, regions
 
 ##########################################################
@@ -227,7 +228,7 @@ def parse_nodes(root):#, invways):
         if child.tag != 'node': continue # not node
         att = child.attrib
         nodes[int(att['id'])] = (float(att['lat']), float(att['lon']))
-    debug('Found {} (traversable) nodes ({:.3f}s)'.format(len(nodes.keys()),
+    info('Found {} (traversable) nodes ({:.3f}s)'.format(len(nodes.keys()),
                                                           time.time() - t0))
     return nodes
 
@@ -284,7 +285,7 @@ def filter_out_orphan_nodes(ways, invways, nodes):
         del invways[nodeid]
 
     ninvways = len(invways.keys())
-    debug('Filtered {} orphan nodes.'.format(ninvways - nnodes))
+    info('Filtered {} orphan nodes.'.format(ninvways - nnodes))
     return ways, invways
 
 ##########################################################
@@ -330,7 +331,7 @@ def get_segments(ways, crossings):
             else: invsegments[snode] = [sid]
         sid += 1
 
-    debug('Found {} segments ({:.3f}s)'.format(len(segments.keys()), time.time() - t0))
+    info('Found {} segments ({:.3f}s)'.format(len(segments.keys()), time.time() - t0))
     return segments, invsegments
 
 ##########################################################
@@ -344,7 +345,7 @@ def evenly_space_segment(segment, nodes, epsilon):
     Returns:
     coords(ndarray(., 2)): array of coordinates
     """
-    #debug(segment)
+    #info(segment)
     prevnode = np.array(nodes[segment[0]])
     points = [prevnode]
 
@@ -392,7 +393,7 @@ def evenly_space_segments(segments, nodes, epsilon=0.0001):
         points[idx:idx+n, 0:2] = coords
         points[idx:idx+n, 2] = sid
         idx = idx + n
-    debug('New {} support points ({:.3f}s)'.format(idx, time.time() - t0))
+    info('New {} support points ({:.3f}s)'.format(idx, time.time() - t0))
     return points[:idx, :]
 
 ###########################################################
@@ -410,7 +411,7 @@ def get_count_by_segment(csvinput, segments, artpoints, crossing_points):
     artpointstree = scipy.spatial.cKDTree(artpoints[:,:2])
     crossing_pointstree = scipy.spatial.cKDTree(crossing_points[:,:2])
 
-    debug('cKDTree created ({:.3f}s)'.format(time.time() - t0))
+    info('cKDTree created ({:.3f}s)'.format(time.time() - t0))
 
     t0 = time.time()
     fh = open(csvinput)
@@ -474,10 +475,10 @@ def get_count_by_segment(csvinput, segments, artpoints, crossing_points):
         if intersection_denom[i] > 0:
             intersection_counts[i] /= intersection_denom[i]
 
-    debug('Max count:{}'.format(maxcount))
-    warning('nerrors:{}'.format(nerrors))
+    info('Max count:{}'.format(maxcount))
+    info('nerrors:{}'.format(nerrors))
     fh.close()
-    debug('Points aggregated ({:.3f}s)'.format(time.time() - t0))
+    info('Points aggregated ({:.3f}s)'.format(time.time() - t0))
     return counts, intersection_counts
 
 ##########################################################
@@ -501,49 +502,45 @@ def extradata_to_patches(nodes, extradataarray,rot,**kwargs):
     return all_patches
 
 ##########################################################
-def render_map(d, render_all, outdir, logplot=False, winsize=(4.5, 16), angle=0,
-               xlim=None, ylim=None):
-    t0 = time.time()
-    debug('Start rendering')
+def render_map(d, shppath, render_all, outdir, logplot=False, winsize=(4.5, 16),
+        xlim=None, ylim=None):
+    """Render the counts aggregated by streets" """
+    info(inspect.stack()[0][3] + '()')
 
     fig, ax = plt.subplots(1,1, figsize=winsize)
 
     # Render segments
-    i = 0
     maxvalue = np.log(25)
-
-    rot = np.array( [[np.cos(angle),np.sin(angle)],[-np.sin(angle),np.cos(angle)]])
 
     lines = []
     values = []
+    # ranges
     min_lats = []
     max_lats = []
     min_lons = []
     max_lons = []
 
     for wid, wnodes in d['segments'].items():
-        i += 1
-
         lats = []; lons = []
         for nodeid in wnodes:
             a, o = d['nodes'][nodeid]
             lats.append(a)
             lons.append(o)
 
-        rotated_vals = np.dot(np.column_stack([lons, lats]), rot)
-
-        lines.append(rotated_vals)
+        lines.append(np.column_stack([lons, lats]))
+        
         values.append(d['segcounts'][wid])
-        min_lats.append(np.min(rotated_vals[:,1]))
-        max_lats.append(np.max(rotated_vals[:,1]))
-        min_lons.append(np.min(rotated_vals[:,0]))
-        max_lons.append(np.max(rotated_vals[:,0]))
+        min_lats.append(np.min(lats))
+        max_lats.append(np.max(lats))
+        min_lons.append(np.min(lons))
+        max_lons.append(np.max(lons))
 
     values = np.array(values)
     min_lats = np.array(min_lats)
     max_lats = np.array(max_lats)
     min_lons = np.array(min_lons)
     max_lons = np.array(max_lons)
+    
 
     if xlim is None:
         min_ax = min( np.min(l[:,0]) for l in lines  )
@@ -559,6 +556,7 @@ def render_map(d, render_all, outdir, logplot=False, winsize=(4.5, 16), angle=0,
         min_ay = ylim[0]
         max_ay = ylim[1]
 
+    breakpoint()
     values_to_measure = np.logical_and(values>0 ,
                             np.logical_and(
                                 np.logical_and(min_ay <= max_lats,max_ay >= min_lats),
@@ -593,24 +591,21 @@ def render_map(d, render_all, outdir, logplot=False, winsize=(4.5, 16), angle=0,
     cmap_name = 'mapbox_grays'
     cmap = LinearSegmentedColormap.from_list(
                     cmap_name, mycolors, N=n_bin)
-    # cmap = 'Greys'
-    # cmap = 'Blues'
-    cmap = 'PuBu'
-    # cmap = 'OrRd'
+
+    cmap = 'hot' # 'hot', 'OrRd', 'Blues', 'Greys'
 
     line_segments = LineCollection(lines,
                                    linewidths=(3),
                                    linestyles='solid',
                                    norm=cnorm,
                                    cmap=cmap,
-                                   # colors=['blue'],
                                    capstyle='round')
     line_segments.set_array(values)
     ax.add_collection(line_segments)
     # axcb = fig.colorbar(line_segments,aspect=50,orientation='vertical')
     # axcb.set_label('Relative Pedestrian Density',size=15)
 
-    crossing_points_rot = np.dot(d['crossing_points'], rot.T)
+    crossing_points_rot = d['crossing_points']
     # plt.scatter(crossing_points_rot[:,1],crossing_points_rot[:,0],s=16,
                 # c=d['intersection_counts'],cmap=cmap,norm=cnorm)
 
@@ -619,7 +614,7 @@ def render_map(d, render_all, outdir, logplot=False, winsize=(4.5, 16), angle=0,
         for k, v in ROI.items():
             if k == 'road': continue # it is rendered in another part
             all_patches += extradata_to_patches(d['nodes'], d['regions'][k],
-                                                rot, color=v['c'], zorder=v['z'])
+                                                np.eye(2), color=v['c'], zorder=v['z'])
 
         if len(all_patches) > 0 :
             p = PatchCollection(all_patches,match_original=True)
@@ -630,10 +625,7 @@ def render_map(d, render_all, outdir, logplot=False, winsize=(4.5, 16), angle=0,
     ax.set_xlim(min_ax, max_ax)
     ax.set_ylim(min_ay, max_ay)
 
-    # source_shapefile = "/tmp/manhattanmap/wv.shp"
-    source_shapefile = "data/vectormaps/manhattan.shp"
-    # source_shapefile = "data/vectormaps/wv.shp"
-    with fiona.open(source_shapefile) as source:
+    with fiona.open(shppath) as source:
         plot_map(ax, source)
 
     axcb = fig.colorbar(line_segments,aspect=50,orientation='vertical')
@@ -652,8 +644,8 @@ def render_map(d, render_all, outdir, logplot=False, winsize=(4.5, 16), angle=0,
             labelbottom=False) # labels along the bottom edge are off
 
     plt.savefig(os.path.join(outdir, 'map.pdf'))
-    debug('Finished exporting to image ({:.3f}s)'.format(time.time() - t0))
 
+##########################################################
 def export_geojson(picklesdir):
     """Export data to geojson
 
@@ -678,18 +670,59 @@ def export_geojson(picklesdir):
     fh.close()
 
 ##########################################################
-if __name__ == '__main__':
+def render_density_of_points(countsdf, outdir, discrete=True):
+    """Render 2d density of points """
+    info(inspect.stack()[0][3] + '()')
+
+    if discrete:
+        render_points_hist2d(countsdf)
+    else:
+        render_points_continuous(countsdf)
+    plt.savefig(os.path.join(outdir, 'points.pdf'))
+
+##########################################################
+def render_points_hist2d(countsdf):
+    """Plot 2d histogram """
+    info(inspect.stack()[0][3] + '()')
+    xs = countsdf.lon
+    ys = countsdf.lat
+    fig, ax = plt.subplots(1,1, figsize=(32,32))
+    h, xedges, yedges = np.histogram2d(xs, ys, bins=200)
+    pc = ax.pcolormesh(xedges, yedges, h.T, cmap='Greys', norm=LogNorm(),
+                       edgecolor=(0.5, 0.5, 0.5, 0.5), linewidth=0.0015625)
+    ax.set_xlim(xedges[0], xedges[-1])
+    ax.set_ylim(yedges[0], yedges[-1])
+
+    ax.tick_params(
+        axis='both',
+        which='both',
+        bottom=False,
+        top=False,
+        left=False,
+        right=False,
+        labelbottom=False,
+        labelleft=False) # labels along the bottom edge are off
+    ax.axis('off')
+    ax.grid(False)
+    axcb = fig.colorbar(pc, ax=ax)
+    axcb.set_label('Number of pictures',size=40)
+    axcb.ax.tick_params(labelsize=40)
+    # plt.savefig(os.path.join(outdir, 'points.pdf'))
+
+##########################################################
+def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('inputosm', help='Input osm file')
-    parser.add_argument('countcsv', help='Csv containing the count per segment')
-    parser.add_argument('outdir', help='Output folder')
-    parser.add_argument('--show', help='Show plot (requires display)', action='store_true')
+    parser.add_argument('--osm', required=True, help='Input osm file')
+    parser.add_argument('--countcsv', required=True, help='Counts in csv fmt')
+    parser.add_argument('--shp', required=True, help='Shapefile of the region')
+    parser.add_argument('--outdir', default='/tmp/out/', help='Output folder')
 
     args = parser.parse_args()
-    logging.basicConfig(level=logging.DEBUG)
 
     xlim = None # (-83.920689662521823, -83.914650455250239)
     ylim = None # (-9.7181982288883919, -9.7147186948317152)
+    # xlim = (-83.920689662521823, -83.914650455250239)
+    # ylim = (-9.7181982288883919, -9.7147186948317152)
     # xlim = (-4756.8911953312218, -4754.7348445911539)
     # ylim = (592, 594.95)
     renderall = False
@@ -697,51 +730,14 @@ if __name__ == '__main__':
     logscale = True
     winsize = (32,32)
     # winsize = (16,16)
-    # rotangle = 0.62
-    rotangle = 0
-    # rotangle = np.deg2rad(28.912)
 
+    # countsdf = pd.read_csv(args.countcsv)
+    # render_density_of_points(countsdf, args.outdir, discrete=True)
 
-    ########################################################## plot count
-    df = pd.read_csv(args.countcsv)
-    x = df.lon
-    y = df.lat
+    v = aggregate_by_streets(args.osm, args.countcsv, args.outdir)
+    render_map(v, args.shp, renderall, args.outdir, logscale, winsize,
+            xlim, ylim)
 
-    fig, ax = plt.subplots(1,1, figsize=(32,32))
-
-    # heatmap, xedges, yedges = np.histogram2d(x, y, bins=200)
-    # extent = [xedges[0], xedges[-1], yedges[0], yedges[-1]]
-    # ax.imshow(heatmap.T, extent=extent, origin='lower', norm=LogNorm(),
-              # cmap='Greys')
-    # h = ax.hist2d(x, y, bins=200, cmap='Greys', norm=LogNorm())
-
-
-    ##########################################################
-    # h, xedges, yedges = np.histogram2d(x, y, bins=200)
-    # pc = ax.pcolormesh(xedges, yedges, h.T, cmap='Greys', norm=LogNorm(),
-                       # edgecolor=(0.5, 0.5, 0.5, 0.5), linewidth=0.0015625)
-    # ax.set_xlim(xedges[0], xedges[-1])
-    # ax.set_ylim(yedges[0], yedges[-1])
-
-    ##########################################################
-    # ax.tick_params(
-        # axis='both',
-        # which='both',
-        # bottom=False,
-        # top=False,
-        # left=False,
-        # right=False,
-        # labelbottom=False,
-        # labelleft=False) # labels along the bottom edge are off
-    # ax.axis('off')
-    # ax.grid(False)
-    # axcb = fig.colorbar(pc, ax=ax)
-    # axcb.set_label('Number of pictures',size=40)
-    # axcb.ax.tick_params(labelsize=40)
-    # # ax.set_axisbelow(True)
-    # plt.savefig(os.path.join(args.outdir, 'count.pdf'))
-    ##########################################################
-    # input('waiting for users input')
-    # plot_count_pictures(args.outdir)
-    v = compute_or_load(args.inputosm, args.countcsv, args.outdir)
-    render_map(v, renderall, args.outdir, logscale, winsize, rotangle, xlim, ylim)
+##########################################################
+if __name__ == '__main__':
+    main()
