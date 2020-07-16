@@ -1,4 +1,4 @@
-"""Generate plot by blurring """
+"""Plot by simply blurring"""
 
 from bokeh.io import output_notebook, show
 from bokeh.plotting import Figure
